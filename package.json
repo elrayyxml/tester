@@ -38,7 +38,7 @@
     "file-type": "^16.5.4",
     "mime-types": "^2.1.35",
     "link-preview-js": "^3.0.5",
-    "audio-decode": "latest", 
+    "audio-decode": "latest"
   },
   "keywords": [
     "whatsapp",
