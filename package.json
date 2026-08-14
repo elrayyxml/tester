@@ -1,42 +1,51 @@
 {
   "name": "@nexray/lib",
   "version": "0.1.0",
-  "description": "Lightweight Baileys helper — serialize + relay-based send helpers.",
-  "main": "./lib/index.js",
-  "module": "./lib/index.mjs",
+  "description": "Simplicity WhatsApp Bot Helper (Baileys) — serialize + relay-based send helpers.",
+  "main": "lib/index.js",
+  "module": "lib/index.mjs",
   "exports": {
     ".": {
       "import": "./lib/index.mjs",
       "require": "./lib/index.js"
     }
   },
-  "type": "commonjs",
   "files": [
-    "lib"
+    "lib/*"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nexray/lib.git"
+  },
+  "keywords": [
+    "whatsapp-bot",
+    "whatsapp-api",
+    "bot",
+    "whatsapp",
+    "wabot",
+    "baileys",
+    "relay",
+    "serialize"
+  ],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/nexray/lib/issues"
+  },
+  "homepage": "https://github.com/nexray/lib#readme",
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "audio-decode": "^2.1.4",
+    "file-type": "^16.5.4",
+    "jimp": "^0.22.12",
+    "link-preview-js": "^3.0.5",
+    "mime-types": "^2.1.35",
+    "sharp": "^0.33.5"
   },
   "peerDependencies": {
     "baileys": "^7.0.0-rc10"
   },
-  "dependencies": {
-    "file-type": "^16.5.4",
-    "mime-types": "^2.1.35",
-    "sharp": "^0.33.5",
-    "jimp": "^0.22.12",
-    "link-preview-js": "^3.0.5",
-    "audio-decode": "^2.2.3",
-    "music-metadata": "^11.12.3"
-  },
-  "keywords": [
-    "whatsapp",
-    "baileys",
-    "bot",
-    "whatsapp-bot",
-    "relay",
-    "serialize"
-  ],
-  "license": "MIT",
-  "author": "nexray"
+  "note": "baileys is intentionally NOT bundled as a dependency — install it yourself (peerDependency only). @nexray/lib attaches helpers onto a socket instance you already created with makeWASocket(); it does not create or manage the socket, auth state, or session for you."
 }
