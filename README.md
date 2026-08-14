@@ -211,6 +211,60 @@ try {
 
 ---
 
+## Revisi helper pesan
+
+Seluruh helper pengiriman memakai strict mode dan menerima quoted message dalam bentuk hasil `serialize`, raw `WAMessage`, atau object `{ key, message }`. Metadata quoted dinormalisasi kembali ke `contextInfo.participant`, `stanzaId`, `remoteJid`, dan `quotedMessage`.
+
+```js
+await sock.sendText(jid, 'Balasan', m, {
+  mentions: ['628123456789@s.whatsapp.net'],
+  mentionAll: true,
+  contextInfo: { forwardingScore: 1 },
+  linkPreview: false
+})
+
+await sock.sendLocation(jid, {
+  latitude: -6.2,
+  longitude: 106.8,
+  name: 'Jakarta'
+}, m, {
+  text: 'Pilih tindakan',
+  buttons: [{ name: 'quick_reply', paramsJson: { id: 'open' } }]
+})
+
+await sock.sendVideo(jid, video, 'Video', m, { ptv: true, gifPlayback: false })
+await sock.sendImage(jid, image, 'Foto', m)
+await sock.sendAudio(jid, audio, m, { ptt: true })
+
+await sock.sendAlbum(jid, [
+  { image: imageUrlOrBuffer },
+  { video: videoPathOrBuffer }
+], m)
+```
+
+Ketika `ptt: true`, helper audio memetakan input audio melalui ffmpeg untuk mengisi `waveform` dan durasi bila belum diberikan. `sendAlbum` menerima media image/video melalui URL, buffer, path lokal, atau object `{ image }`/`{ video }`, serta mengirim parent album dan child media dengan `messageAssociation.parentMessageKey`.
+
+Untuk product, helper mendukung pesan product biasa, product dengan interactive buttons, dan product list:
+
+```js
+await sock.sendProduct(jid, {
+  productImage: image,
+  productId: 'catalog-product-id',
+  businessOwnerJid: '628123456789@s.whatsapp.net',
+  title: 'Produk'
+}, m)
+
+await sock.sendProductList(jid, [{
+  title: 'Katalog',
+  products: [{ productId: 'catalog-product-id' }]
+}], m, {
+  businessOwnerJid: '628123456789@s.whatsapp.net',
+  title: 'Katalog produk'
+})
+```
+
+---
+
 ## License
 
 MIT
