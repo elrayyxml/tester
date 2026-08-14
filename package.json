@@ -25,7 +25,9 @@
     "mime-types": "^2.1.35",
     "sharp": "^0.33.5",
     "jimp": "^0.22.12",
-    "link-preview-js": "^3.0.5"
+    "link-preview-js": "^3.0.5",
+    "audio-decode": "^2.2.3",
+    "music-metadata": "^11.12.3"
   },
   "keywords": [
     "whatsapp",

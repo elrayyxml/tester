@@ -265,6 +265,35 @@ await sock.sendProductList(jid, [{
 
 ---
 
+## Revisi V2: payload native Baileys
+
+Versi revisi kedua mengikuti source `elrayyxml/baileys-itsliaaa`. Waveform PTT dibuat menggunakan `audio-decode` dengan 64 sample dan skala 0..100, sedangkan durasi memakai `music-metadata`.
+
+```js
+await sock.sendAudio(jid, audio, null, quoted, {
+  ptt: true,
+  mimetype: 'audio/mp4'
+})
+
+await sock.sendMedia(jid, audio, null, quoted, {
+  ptt: true,
+  mimetype: 'audio/mp4'
+})
+```
+
+Untuk album, bentuk upstream berikut didukung:
+
+```js
+await sock.sendAlbum(jid, [
+  { media: 'https://example.com/video.mp4', caption: 'Video' },
+  { media: 'https://example.com/image.jpg', caption: 'Image' }
+], quoted)
+```
+
+Jika socket memiliki implementasi upstream `sendMessage` yang memproses `{ album }`, library akan memakai jalur tersebut agar child media direlay dan dihubungkan melalui `messageAssociation`. Pada socket stock tanpa dukungan album, fallback manual digunakan.
+
+---
+
 ## License
 
 MIT
