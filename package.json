@@ -1,51 +1,51 @@
 {
-  "name": "@nexray/lib",
-  "version": "0.1.0",
-  "description": "Simplicity WhatsApp Bot Helper (Baileys) — serialize + relay-based send helpers.",
-  "main": "lib/index.js",
-  "module": "lib/index.mjs",
+  "name": "@elrayyxml/wb",
+  "version": "0.2.0",
+  "description": "Lightweight relay-based WhatsApp bot helper for official Baileys.",
+  "main": "./lib/index.js",
+  "module": "./lib/index.mjs",
+  "types": "./lib/index.d.ts",
   "exports": {
     ".": {
       "import": "./lib/index.mjs",
-      "require": "./lib/index.js"
+      "require": "./lib/index.js",
+      "default": "./lib/index.js"
     }
   },
+  "type": "commonjs",
   "files": [
-    "lib/*"
+    "lib/**/*",
+    "README.md",
+    "LICENSE"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nexray/lib.git"
+    "url": "git+https://github.com/elrayyxml/wb.git"
   },
   "keywords": [
     "whatsapp-bot",
     "whatsapp-api",
+    "baileys",
     "bot",
     "whatsapp",
     "wabot",
-    "baileys",
-    "relay",
-    "serialize"
+    "native-flow",
+    "newsletter"
   ],
-  "author": "",
+  "author": "elrayyxml",
   "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/nexray/lib/issues"
-  },
-  "homepage": "https://github.com/nexray/lib#readme",
   "engines": {
-    "node": ">=18"
-  },
-  "dependencies": {
-    "audio-decode": "^2.1.4",
-    "file-type": "^16.5.4",
-    "jimp": "^0.22.12",
-    "link-preview-js": "^3.0.5",
-    "mime-types": "^2.1.35",
-    "sharp": "^0.33.5"
+    "node": ">=20"
   },
   "peerDependencies": {
     "baileys": "^7.0.0-rc10"
   },
-  "note": "baileys is intentionally NOT bundled as a dependency — install it yourself (peerDependency only). @nexray/lib attaches helpers onto a socket instance you already created with makeWASocket(); it does not create or manage the socket, auth state, or session for you."
+  "dependencies": {
+    "audio-decode": "^2.2.3",
+    "mime-types": "^2.1.35"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check lib/index.js && node --check lib/core/extend.js && node --check lib/core/serialize.js"
+  }
 }

@@ -1,299 +1,155 @@
-# @nexray/lib
+# @elrayyxml/wb
 
-Lightweight helper / wrapper on top of [Baileys](https://github.com/WhiskeySockets/Baileys).  
-It does **not** manage authentication or create sockets — you pass an existing `makeWASocket(...)` instance.
+`@elrayyxml/wb` adalah helper library ringan untuk **Baileys resmi**. Library ini tidak membuat socket, tidak mengelola kredensial, dan tidak menggantikan `makeWASocket`. Anda membuat socket Baileys sendiri, kemudian `Client(sock, options)` atau `Extend(sock, options)` menempelkan helper pengiriman pesan ke socket tersebut.
 
-Focus:
+> Semua jalur pengiriman helper menggunakan `sock.relayMessage()`. Baileys tetap menjadi peer dependency dan tidak dibundel ke dalam package ini.
 
-1. **Extend / Client** – attach convenient `sock.sendText`, `sock.sendMedia`, `sock.sendInteractive`, … methods that send via `sock.relayMessage`.
-2. **serialize** – enrich `messages.upsert` payloads into a friendly object (`m.body`, `m.reply()`, `m.react()`, …).
-3. **Utils** – global singleton registry of helper functions that can be extended from any file in your project.
-
-> **Peer dependency**: `baileys ^7.0.0-rc10` (or newer).  
-> This package does **not** install Baileys automatically.
-
----
-
-## Install
+## Instalasi
 
 ```bash
-npm i @nexray/lib baileys@^7.0.0-rc10
-# or
-pnpm add @nexray/lib baileys@^7.0.0-rc10
+npm install @elrayyxml/wb baileys
 ```
 
----
+`audio-decode` digunakan sebagai dependency untuk membaca metadata audio pada pengiriman `ptt: true`. Library ini bersifat best-effort: apabila format audio tidak dapat didekode, pesan tetap diproses oleh Baileys.
 
-## Quick Start
+## Contoh end-to-end
 
 ```js
-import { makeWASocket, useMultiFileAuthState } from 'baileys'
-import { Client } from '@nexray/lib'
+const { makeWASocket, useMultiFileAuthState } = require('baileys')
+const { Client } = require('@elrayyxml/wb')
 
-const { state, saveCreds } = await useMultiFileAuthState('auth')
-const sock = makeWASocket({
-  auth: state,
-  // … your usual Baileys config
-})
+async function main() {
+  const { state, saveCreds } = await useMultiFileAuthState('./auth')
+  const sock = makeWASocket({ auth: state })
 
-sock.ev.on('creds.update', saveCreds)
+  sock.ev.on('creds.update', saveCreds)
 
-await Client(sock, {
-  bot: (id) =>
-    (id.startsWith('3EB0') && id.length === 40) ||
-    id.startsWith('BAE') ||
-    /[-]/.test(id),
-  messageIdPrefix: 'NEXRAY',
-  updateProtoOnStartup: true,
-  autoFollowNewsletter: false,          // must be explicit
-  newsletterAnnotation: false           // must be explicit
-})
-
-sock.ev.on('messages.upsert', async ({ messages }) => {
-  for (const msg of messages) {
-    const m = sock.serialize(msg)
-    if (!m || m.fromMe) continue
-
-    if (m.body === '.ping') {
-      await m.reply('Pong! 🏓')
+  Client(sock, {
+    messageIdPrefix: 'ELRAYYXML',
+    onMessage: async m => {
+      if (m.body === '.ping') await m.reply('Pong!')
     }
+  })
+
+  sock.ev.on('connection.update', update => {
+    if (update.connection === 'open') console.log('Connected')
+  })
+}
+
+main().catch(console.error)
+```
+
+`Client` mengembalikan object socket yang sama. Jika hanya memerlukan helper pengiriman tanpa listener `messages.upsert`, gunakan `await Extend(sock, options)`.
+
+## API pengiriman
+
+| Method | Kegunaan |
+|---|---|
+| `sendText(jid, text, quoted?, options?)` | Teks, mention, dan link preview best-effort. |
+| `sendAdText(jid, text, quoted?, options?)` | Teks dengan `externalAdReply`. |
+| `sendMedia(jid, input, caption?, quoted?, options?)` | Buffer, URL, path, atau stream; mendeteksi MIME otomatis. |
+| `sendPtv(jid, input, quoted?, options?)` | Video berbentuk PTV. |
+| `sendSticker(jid, input, quoted?, options?)` | Sticker dari media. |
+| `sendInteractive(jid, buttons, quoted?, options?)` | Quick reply, URL, call, copy, list, native flow, dan `interactiveButtons`. |
+| `sendCarousel(jid, cards, quoted?, options?)` | Entry point carousel yang menggunakan interactive message. |
+| `sendPoll(jid, values, quoted?, options?)` | Poll biasa. |
+| `sendQuiz(jid, values, quoted?, options?)` | Quiz newsletter; memerlukan `correctAnswer`. |
+| `sendContact`, `sendLocation`, `sendAlbum` | Helper pesan umum. |
+| `sendLegacyButton`, `sendLegacyList` | Format tombol/list lama; legacy list hanya private chat. |
+| `sendReact(jid, emoji, key)` | Reaction terhadap message key. |
+
+## Interactive message
+
+Satu fungsi `sendInteractive` digunakan sebagai entry point untuk beberapa bentuk interaktif. Bentuk tombol yang didukung oleh builder bawaan meliputi `quick_reply`, `url`, `call`, `copy`, dan `list`.
+
+```js
+await sock.sendInteractive(
+  jid,
+  [
+    { type: 'quick_reply', id: 'yes', text: 'Ya' },
+    { type: 'url', text: 'Dokumentasi', url: 'https://example.com' },
+    { type: 'call', text: 'Hubungi', phoneNumber: '+628123456789' },
+    { type: 'copy', text: 'Salin kode', code: 'ELRAYYXML' }
+  ],
+  quoted,
+  {
+    body: 'Pilih tindakan',
+    footer: 'Powered by @elrayyxml/wb',
+    interactiveButtons: [
+      { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Custom', id: 'custom' }) }
+    ]
   }
+)
+```
+
+Untuk format native flow mentah, pass `nativeFlowMessage` atau `interactiveButtons` melalui options. Untuk list, pass `sections` pada options; library akan membuat native-flow `single_select`.
+
+## Media dan PTT
+
+```js
+await sock.sendMedia(jid, './voice.ogg', '', quoted, {
+  ptt: true,
+  mime: 'audio/ogg; codecs=opus'
+})
+
+await sock.sendMedia(jid, imageBuffer, 'Caption', quoted, {
+  mentions: ['628123456789@s.whatsapp.net']
 })
 ```
 
----
-
-## API Overview
-
-### `Client(sock, options)`
-
-Mutates the given Baileys socket in-place, attaches every helper method, and installs the built-in listeners.
-
-Returns the same socket (for chaining).
-
-### `Extend(sock, options)`
-
-Same method attachment as `Client`, but **does not** install any listeners.  
-Useful when you want full control over event handling.
-
-### Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `bot` | `(id: string) => boolean` | simple regex | Used by `serialize` to set `m.isBot` |
-| `stealth` | `'ios' \| 'android' \| 'web' \| 'desktop'` | `undefined` | Reserved for future device spoofing |
-| `messageIdPrefix` | `string` | `undefined` | Inserted into generated message IDs |
-| `updateProtoOnStartup` | `boolean` | `true` | Placeholder for proto refresh |
-| `autoFollowNewsletter` | `string \| string[] \| false` | `false` | Explicitly follow newsletter(s) on start |
-| `newsletterAnnotation` | `IForwardedNewsletterMessageInfo \| false` | `false` | Attach newsletter annotation to media |
-| `logger` | Baileys-compatible logger | no-op | Optional logger |
-| `onMessage` | `(ctx) => void` | – | High-level message callback |
-
-> **Important**: `autoFollowNewsletter` and `newsletterAnnotation` default to `false`.  
-> No hardcoded newsletter JIDs or hidden network calls exist in the library.
-
----
-
-## Serialize
-
-```js
-const m = sock.serialize(rawMessage)
-```
-
-Produces an object with at least:
-
-| Field | Description |
-|-------|-------------|
-| `key` | Original message key |
-| `id` | Alias of `key.id` |
-| `chat` | Alias of `key.remoteJid` |
-| `sender` | Normalized sender JID |
-| `senderLid` | LID of sender when available |
-| `fromMe` | Boolean |
-| `isGroup` / `isPrivate` / `isNewsletter` | Boolean helpers |
-| `isBot` | Result of `options.bot(id)` |
-| `device` | Detected device (`ios` / `android` / `web` / …) |
-| `type` | Content type key (`conversation`, `imageMessage`, …) |
-| `msg` | The typed content object |
-| `body` | Normalized text body |
-| `mentionedJid` | Array of mentioned JIDs |
-| `quoted` | Recursively serialized quoted message (1 level) |
-| `reply(text, opts?)` | Shortcut → `sock.sendText(chat, text, m, opts)` |
-| `react(emoji)` | Shortcut → `sock.sendReact(chat, emoji, key)` |
-
----
-
-## Sending helpers (all use `relayMessage`)
-
-```js
-await sock.sendText(jid, 'Hello', m)
-await sock.sendAdText(jid, 'Check this', m, { title: '…', description: '…' })
-await sock.sendReact(jid, '👍', key)
-await sock.sendMedia(jid, bufferOrUrl, 'caption', m)
-await sock.sendPtv(jid, videoBuffer, m)
-await sock.sendSticker(jid, stickerBuffer, m)
-await sock.sendStickerPack(jid, [buf1, buf2], m, { name: 'My Pack' })
-await sock.sendContact(jid, contacts, m)
-await sock.sendLocation(jid, { latitude, longitude, name }, m)
-await sock.sendAlbum(jid, items, m)
-await sock.sendPoll(jid, ['A', 'B'], m, { name: 'Vote' })
-await sock.sendQuiz(newsletterJid, ['A', 'B'], m, { correctAnswer: 0 })
-await sock.sendInteractive(jid, buttons, m, { caption: '…' })
-await sock.sendCarousel(jid, cards, m)
-await sock.sendLegacyButton(jid, buttons, m)
-await sock.sendLegacyList(jid, sections, m)   // private chats only
-await sock.sendOrderMessage(jid, thumb, text, m)
-await sock.sendCopyMessage(jid, quotedMsg)
-await sock.sendStatus(jids, content)
-await sock.sendGroupStatus(jid, content)
-```
-
-All of them ultimately call `sock.relayMessage`.
-
----
+`sendMedia` tidak memerlukan `@neoxr/*`. Helper menggunakan `mime-types` dan deteksi magic bytes sederhana. Resizing thumbnail tidak dipaksakan; konsumen dapat menambahkan helper sendiri menggunakan `Utils.extend`.
 
 ## Utils singleton
 
 ```js
-// anywhere in your project
-import { Utils } from '@nexray/lib'
+const { Utils } = require('@elrayyxml/wb')
 
 Utils.extend({
-  formatRupiah(n) {
-    return 'Rp' + Number(n).toLocaleString('id-ID')
-  },
-  isAdmin(jid, groupMetadata) {
-    return groupMetadata.participants.some(
-      p => p.id === jid && (p.admin === 'admin' || p.admin === 'superadmin')
-    )
+  formatRupiah(value) {
+    return `Rp${Number(value).toLocaleString('id-ID')}`
   }
 })
 
-// later, in another file (after the extend has been executed at least once)
-import { Utils } from '@nexray/lib'
-console.log(Utils.formatRupiah(50000)) // "Rp50.000"
+console.log(Utils.formatRupiah(50000))
 ```
 
-Built-in helpers: `sleep`, `generateMessageId`, `getDevice`, `formatBytes`, `randomInt`, `pickRandom`, `isUrl`, `getBufferFromUrl`, `detectMime`, `getStream`, `extractImageThumb`, `getUrlInfo`, `getContentType`, `getBodyFromMessage`, …
+Registry ini bersifat module-level singleton. Method bawaan tidak dapat dioverride secara diam-diam; percobaan override menghasilkan warning Node.js.
 
----
+## Newsletter
 
-## Global config
+`autoFollowNewsletter` default-nya `false`. Follow hanya dijalankan apabila JID diberikan secara eksplisit oleh pengguna.
 
-```js
-import { getGlobalConfig, setGlobalConfig } from '@nexray/lib'
-
-setGlobalConfig({
-  TEMP_DIR: './tmp',
-  REQUEST_TIMEOUT: 30000
-})
-```
-
-Environment variables `FFMPEG_PATH`, `TEMP_DIR`, `REQUEST_TIMEOUT`, … are also respected.
-
----
-
-## Error handling
-
-All public send helpers throw `NexrayError` (with a `code` property) on validation failure instead of a generic `Error`.
+Pada JID yang berakhiran `@newsletter`, helper akan memakai encoder newsletter publik dari Baileys apabila socket mengekspos `sendNode`. Jalur ini meniru patch fork yang relevan: pesan dipatch sebelum encoding, `mediatype` ditambahkan pada node plaintext, dan `additionalNodes` dapat diteruskan secara eksplisit. Jika `sendNode` atau encoder tidak tersedia, library kembali ke `sock.relayMessage()` dan menyerahkan encoding kepada Baileys.
 
 ```js
-import { NexrayError } from '@nexray/lib'
-
-try {
-  await sock.sendQuiz('not-a-newsletter', ['A'], null, {})
-} catch (e) {
-  if (e instanceof NexrayError) {
-    console.error(e.code, e.message)
+Client(sock, {
+  patchMessageBeforeSending: async (message, recipients) => {
+    // Kembalikan satu WebMessage/proto Message; jangan kembalikan array untuk newsletter.
+    return message
   }
-}
+})
+
+await sock.sendMedia('1234567890@newsletter', imageBuffer, 'Foto baru', undefined, {
+  additionalAttributes: { custom_flag: '1' },
+  additionalNodes: [{ tag: 'meta', attrs: { source: 'bot' } }]
+})
 ```
-
----
-
-## Revisi helper pesan
-
-Seluruh helper pengiriman memakai strict mode dan menerima quoted message dalam bentuk hasil `serialize`, raw `WAMessage`, atau object `{ key, message }`. Metadata quoted dinormalisasi kembali ke `contextInfo.participant`, `stanzaId`, `remoteJid`, dan `quotedMessage`.
 
 ```js
-await sock.sendText(jid, 'Balasan', m, {
-  mentions: ['628123456789@s.whatsapp.net'],
-  mentionAll: true,
-  contextInfo: { forwardingScore: 1 },
-  linkPreview: false
-})
-
-await sock.sendLocation(jid, {
-  latitude: -6.2,
-  longitude: 106.8,
-  name: 'Jakarta'
-}, m, {
-  text: 'Pilih tindakan',
-  buttons: [{ name: 'quick_reply', paramsJson: { id: 'open' } }]
-})
-
-await sock.sendVideo(jid, video, 'Video', m, { ptv: true, gifPlayback: false })
-await sock.sendImage(jid, image, 'Foto', m)
-await sock.sendAudio(jid, audio, m, { ptt: true })
-
-await sock.sendAlbum(jid, [
-  { image: imageUrlOrBuffer },
-  { video: videoPathOrBuffer }
-], m)
-```
-
-Ketika `ptt: true`, helper audio memetakan input audio melalui ffmpeg untuk mengisi `waveform` dan durasi bila belum diberikan. `sendAlbum` menerima media image/video melalui URL, buffer, path lokal, atau object `{ image }`/`{ video }`, serta mengirim parent album dan child media dengan `messageAssociation.parentMessageKey`.
-
-Untuk product, helper mendukung pesan product biasa, product dengan interactive buttons, dan product list:
-
-```js
-await sock.sendProduct(jid, {
-  productImage: image,
-  productId: 'catalog-product-id',
-  businessOwnerJid: '628123456789@s.whatsapp.net',
-  title: 'Produk'
-}, m)
-
-await sock.sendProductList(jid, [{
-  title: 'Katalog',
-  products: [{ productId: 'catalog-product-id' }]
-}], m, {
-  businessOwnerJid: '628123456789@s.whatsapp.net',
-  title: 'Katalog produk'
+Client(sock, {
+  autoFollowNewsletter: ['1234567890@newsletter'],
+  newsletterAnnotation: {
+    newsletterJid: '1234567890@newsletter',
+    newsletterName: 'Channel saya',
+    contentType: 1
+  }
 })
 ```
 
----
+Tidak ada JID newsletter, timer, endpoint, atau network call tersembunyi yang ditanam di library.
 
-## Revisi V2: payload native Baileys
+## Catatan kompatibilitas
 
-Versi revisi kedua mengikuti source `elrayyxml/baileys-itsliaaa`. Waveform PTT dibuat menggunakan `audio-decode` dengan 64 sample dan skala 0..100, sedangkan durasi memakai `music-metadata`.
+ZIP `@itsliaaa/baileys` yang dijadikan referensi berisi perubahan internal Baileys, khususnya pada relay newsletter dan beberapa bentuk interactive message. Porting pada package ini mencakup encoder newsletter publik, `patchMessageBeforeSending` sebelum relay, `mediatype` pada node plaintext, `additionalAttributes`, `additionalNodes`, pemilihan tipe stanza, dan fallback ke `relayMessage` ketika `sendNode` atau encoder tidak tersedia.
 
-```js
-await sock.sendAudio(jid, audio, null, quoted, {
-  ptt: true,
-  mimetype: 'audio/mp4'
-})
-
-await sock.sendMedia(jid, audio, null, quoted, {
-  ptt: true,
-  mimetype: 'audio/mp4'
-})
-```
-
-Untuk album, bentuk upstream berikut didukung:
-
-```js
-await sock.sendAlbum(jid, [
-  { media: 'https://example.com/video.mp4', caption: 'Video' },
-  { media: 'https://example.com/image.jpg', caption: 'Image' }
-], quoted)
-```
-
-Jika socket memiliki implementasi upstream `sendMessage` yang memproses `{ album }`, library akan memakai jalur tersebut agar child media direlay dan dihubungkan melalui `messageAssociation`. Pada socket stock tanpa dukungan album, fallback manual digunakan.
-
----
-
-## License
-
-MIT
+Package ini tetap tidak menyalin mekanisme internal enkripsi Signal, device fan-out, sender-key group, media retry, atau closure socket dari fork. Bagian tersebut tetap menjadi tanggung jawab Baileys resmi. Dengan demikian, kompatibilitas fitur newsletter bergantung pada versi Baileys yang dipasang; implementasi telah diuji terhadap `baileys@7.0.0-rc14` dan menggunakan export publik yang tersedia pada versi tersebut.
