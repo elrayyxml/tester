@@ -127,16 +127,23 @@ await sock.sendContact(m.chat, [{
   email: 'a@b.com'
 })
 
-await sock.sendProduct(m.chat, {
-  title: 'Hoodie',
-  description: 'Soft cotton',
-  price: 150000,                 // → priceAmount1000
-  currencyCode: 'IDR',
+await sock.sendProduct(remoteJid, {
+  image: 'https://…/img.jpg',   // or Buffer / path — alias: productImage
+  title: '© bot',
   productId: 'SKU-1',
-  retailerId: 'nexray',
-  url: 'https://shop.example.com/hoodie',
-  productImage: 'https://…/img.jpg'  // Buffer | path | url
-}, m)
+  businessOwnerJid: '628…@s.whatsapp.net',
+  caption: 'text body',
+  footer: 'footer',
+  price: 150000,                // optional
+  currencyCode: 'IDR',          // optional
+  interactiveButtons: [         // optional
+    { name: 'cta_url', buttonParamsJson: JSON.stringify({ display_text: 'Download', url: 'https://…' }) },
+    { name: 'automated_greeting_message_view_catalog', buttonParamsJson: JSON.stringify({
+        business_phone_number: '628…',
+        catalog_product_id: 'SKU-1'
+    }) }
+  ]
+}, message)
 ```
 
 ### Interactive / buttons / carousel
