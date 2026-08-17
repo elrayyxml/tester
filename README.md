@@ -115,8 +115,8 @@ shape (`{ poll: {...} }`, `{ album: [...] }`, …) is unchanged.
 
 ```ts
 Client(sock, {
-  messageIdPrefix?: string,          // default 'NEXRAY' — prefixes generated message IDs
-  autoFollowNewsletter?: false | string | string[], // opt-in only, no hidden behavior
+  custom_id?: string,                // default 'NEXRAY' — prefixes generated message IDs (was messageIdPrefix)
+  newsletterFollow?: false | string | string[], // opt-in only (was autoFollowNewsletter)
   newsletterAnnotation?: false | {
     newsletterJid: string,
     newsletterName: string,
@@ -126,7 +126,8 @@ Client(sock, {
     polygonVertices?: { x: number, y: number }[]  // default: built-in vertices
   },
   bot?: (id: string) => boolean,     // used to detect bot/business-relayed message IDs
-  baileys?: object,                  // override which baileys module instance is used
+  stealth?: 'ios' | 'android' | 'web' | 'desktop' | 'dekstop', // device-shaped message IDs
+  engines?: object[],                // e.g. [require('baileys')] — first entry wins (was `baileys:`)
   updateProtoOnStartup?: boolean     // default true — reserved, does not block attach
 })
 ```
@@ -135,16 +136,31 @@ Everything you pass is stored on `sock.__nexray` and merged with defaults — yo
 read it back at any time (`sock.__nexray.newsletterAnnotation`, etc.), and any extra
 keys you pass through are preserved as-is for your own use.
 
+The old option names (`messageIdPrefix`, `autoFollowNewsletter`, `baileys`) still work
+as fallbacks — nothing breaks if you're upgrading from an older config.
+
+### Stealth (device-shaped message IDs)
+
+```js
+Client(sock, { stealth: 'ios' })      // '3A' + 18 hex chars (20 total)
+Client(sock, { stealth: 'web' })      // '3E' + 20 hex chars (22 total)
+Client(sock, { stealth: 'android' })  // 21 raw hex chars
+Client(sock, { stealth: 'desktop' })  // '3F' + 16 hex chars (18 total) — 'dekstop' also accepted
+```
+
+Shapes match Baileys' own `getDevice(id)` pattern-matching exactly, so a stealth-tagged
+outgoing message ID reads as coming from that device type. When `stealth` is set it
+takes priority over `custom_id`; leave it unset to use the readable prefix instead.
+
 ### Overriding the baileys module
 
 `@nexray/lib` resolves `require('baileys')` **once**, at module load, and reuses that
-single reference for every send call (see
-[Changelog](#changelog--fixes-in-this-revision) below). If you need to inject a
-different baileys build (a fork, a patched version, a mock in tests), pass it explicitly:
+single reference for every send call. If you need to inject a different baileys build
+(a fork, a patched version, a mock in tests), pass it via `engines`:
 
 ```js
 Client(sock, {
-  baileys: require('my-baileys-fork')
+  engines: [require('my-baileys-fork')]
 })
 ```
 
@@ -155,15 +171,18 @@ with no extra `require()` overhead in the hot path.
 
 ## Calling convention
 
-- **Quoted message** is always **positional** (`…, m)`), matching neoxr/Baileys
-  conventions — never buried inside an options object unless you're using the
-  options-object-only overload documented per method.
+- **Quoted message** is always **positional**, placed **right before the trailing
+  options object** (`sendX(jid, ..., quoted, opts)`) — matching neoxr/Baileys
+  conventions. It is never buried inside `opts` in the documented signature.
+  `sendThumbnailPreview` is the one exception that accepts **either** order
+  (`(jid, text, quoted, opts)` or `(jid, text, opts, quoted)`) since its options object
+  is commonly written inline before the trailing `m` in real bot code — both orders are
+  detected automatically and work identically.
 - **Media** accepts `Buffer | path string | http(s) url | { url }` everywhere.
 - Most helpers accept **either** `(jid, payload, quoted, opts)` **or**
   `(jid, payload, opts)` — if the 3rd positional argument doesn't look like a quoted
   message (`m` / `{ key }` / `{ id, chat }`) and does look like an options object, it's
-  treated as `opts` automatically. When in doubt, pass `quoted` positionally and put
-  everything else in the trailing `opts` object.
+  treated as `opts` automatically.
 - `opts.messageId` lets you pin a specific message ID instead of the auto-generated one.
 - `opts.expiration` sets disappearing-message duration (seconds) where applicable.
 - `opts.mentions` / `opts.mentionedJid` accepts an array of JIDs.
@@ -227,17 +246,34 @@ await sock.sendLocation(m.chat, [-6.2, 106.8], m)
 await sock.sendSticker(m.chat, './s.webp', m)
 await sock.sendSticker(m.chat, buffer, m)
 
+// packname/author are embedded into the webp's EXIF chunk — this is the only place
+// WhatsApp actually reads sticker metadata from (not a protobuf field), so both are
+// written into the image bytes themselves before upload.
+await sock.sendSticker(m.chat, './s.webp', m, {
+  packname: 'My Pack',
+  author: 'Nexray',
+  emojis: ['🔥', '😀'],   // optional, defaults to ['🔥']
+  isAvatar: false,        // optional
+  isLottie: false,        // optional — animated Lottie sticker wrapper
+  premium: false,         // optional — adds limitSharingV2 lock
+  locked: false           // optional — same lock, without the premium flag
+})
+
 await sock.sendStickerPack(m.chat, {
   name: 'My Pack',
   publisher: 'nexray',
-  description: 'optional',
-  cover: './cover.webp',
+  cover: './cover.webp',        // currently informational only — not sent as a separate message
   stickers: [
-    { data: webpBuffer, emojis: ['😀'] },
-    { data: webpBuffer2, emojis: ['🔥'] }
+    { data: './a.webp', emojis: ['😀'] },
+    { data: buffer, emojis: ['🔥'] }
   ]
 }, m)
 ```
+
+`sendStickerPack` sends every sticker in the pack tagged with the same
+`packname`/`publisher`, one relayed sticker message per item — WhatsApp has no native
+multi-sticker "bundle" message, so this mirrors how real bots deliver packs. A failed
+item is logged and skipped rather than aborting the whole pack.
 
 ### Album (min. 2 media)
 
@@ -313,15 +349,19 @@ await sock.pollResult(m.chat, {
 | neoxr-style options object | `sendPoll(jid, 'Question?', { options: [...], multiselect }, m)` |
 | Plain values array + quoted | `sendPoll(jid, 'Question?', ['Yes','No'], m)` |
 
-Internally `sendPoll`/`sendQuiz` build the same `{ poll: {...} }` content shape Baileys'
-own `generateWAMessageContent` expects (`pollCreationMessageV3` for single-select,
-`pollCreationMessage` for multi-select, `pollCreationMessageV5` for quizzes), and
-`sendPollResult`/`sendQuizResult` build `{ pollResult: { name, votes } }`, which maps to
-`pollResultSnapshotMessage` / `pollResultSnapshotMessageV3` respectively.
+Internally `sendPoll`/`sendQuiz`/`sendPollResult`/`sendQuizResult` build the **raw
+proto message directly** (`pollCreationMessage` / `pollCreationMessageV2` /
+`pollCreationMessageV3` / `pollCreationMessageV5` for creation, and
+`pollResultSnapshotMessage` / `pollResultSnapshotMessageV3` for results) via
+`generateWAMessageFromContent`, instead of relying on baileys' higher-level
+`generateWAMessageContent` to understand a `poll`/`pollResult` content-key. This makes
+polls work on **any** baileys build, including ones that don't ship those content-key
+branches — see [Changelog](#changelog--fixes-in-this-revision) for why this matters.
 
 ### Contact
 
 ```js
+// personal contact
 await sock.sendContact(m.chat, [{
   name: 'Owner',
   number: '62812xxxxxxx',
@@ -331,7 +371,25 @@ await sock.sendContact(m.chat, [{
   website: 'https://example.com',
   email: 'a@b.com'
 })
+
+// business-style contact card (adds TITLE, ADR, X-WA-BIZ-NAME, X-WA-BIZ-DESCRIPTION)
+await sock.sendContact(m.chat, [{
+  name: 'Owner Name',
+  number: '62812xxxxxxx',
+  business: true,
+  bizName: 'My Bot',
+  bizDescription: 'A beginner bot',
+  title: 'My Bot',
+  region: 'Indonesia',
+  email: 'owner@bot.com',
+  website: 'https://bot.com'
+}], m)
 ```
+
+Both produce a standard vCard 3.0 payload; the business variant matches the exact field
+set WhatsApp Business uses (`N`, `FN`, `TITLE`, `TEL;TYPE=CELL;waid=`,
+`EMAIL;type=INTERNET`, `URL`, `ADR;TYPE=WORK`, `NOTE`, `X-WA-BIZ-NAME`,
+`X-WA-BIZ-DESCRIPTION`).
 
 ### Product
 
@@ -662,75 +720,140 @@ implementation details and may change without a major version bump.
 
 ## Changelog / fixes in this revision
 
-### `sendLivePhoto` thumbnail fix
+### Poll / poll result / quiz messages sent as invisible "raw" payloads
 
-**Bug:** when no `image` was supplied, `sendLivePhoto` extracted a preview frame from
-the video with `extractVideoThumb(path, '00:00:00', ...)` — seeking to the *exact*
-start of the file. On many encodes there is no decodable keyframe at that precise
-offset, so ffmpeg returns an empty or corrupt buffer and the resulting image message
-either fails to send or renders as a blank/broken thumbnail.
+**Bug:** `sendPollResult`, `sendQuizResult`, and the neoxr-style `pollResult` alias threw
+`Error: Invalid media type` from `prepareWAMessageMedia`, and `sendPoll` sent a message
+that relayed successfully but rendered as nothing on the recipient's screen. The cause:
+these helpers built a `{ poll: {...} }` / `{ pollResult: {...} }` **content-key** object
+and asked baileys' own `generateWAMessageContent` to translate it into the correct
+proto — but not every installed baileys build recognizes those content-keys. When it
+doesn't, `generateWAMessageContent`'s `if/else if` chain falls all the way through to
+its final `else` branch, which assumes the object must be raw media, and tries (and
+fails) to upload it as one.
 
-**Fix:** frame extraction now tries a short list of small forward offsets —
-`00:00:01`, `00:00:00.5`, then `00:00:00` as a last resort — and keeps the first
-**non-empty** buffer it gets back, instead of trusting a single attempt at the exact
-start of the file:
+**Fix:** poll and poll-result messages now build the **raw WhatsApp proto object
+directly** — `pollCreationMessage` / `pollCreationMessageV2` / `pollCreationMessageV3`
+/ `pollCreationMessageV5` for creation, `pollResultSnapshotMessage` /
+`pollResultSnapshotMessageV3` for results — and hand it straight to
+`generateWAMessageFromContent`, bypassing `generateWAMessageContent`'s content-key
+translation entirely. This works identically regardless of which baileys build is
+installed, since it no longer depends on that translation layer supporting polls at all.
 
-```js
-var offsets = ['00:00:01', '00:00:00.5', '00:00:00']
-for (var i = 0; i < offsets.length; i++) {
-  var buf = await extractVideoThumb(inputPath, offsets[i], { width: 640, height: 640 }).catch(() => null)
-  if (buf && Buffer.isBuffer(buf) && buf.length > 0) return buf
-}
-```
+### `sendThumbnailPreview` — false "thumbnail required" error
 
-In the common case this costs nothing extra — the first offset (`00:00:01`) succeeds
-immediately on virtually all real-world video files, and the fallback chain only runs
-when a frame genuinely fails to decode.
+**Bug:** passing a perfectly valid `thumbnail: 'https://...'` URL still threw
+`NexrayError: thumbnail required when largeThumb: true`. The internal
+`resolveToBuffer()` helper swallowed **every** failure mode — network timeout, non-2xx
+response, DNS failure — into a silent `null`, so a real fetch failure was reported as a
+generic "you forgot to pass a thumbnail" message instead of the actual cause.
 
-### `require('baileys')` hoisted to module scope
+**Fix:** `resolveToBuffer()` now throws a `NexrayError` with the real reason
+(`HTTP 403 Forbidden`, the underlying fetch error message, or "local file not found")
+instead of returning `null` on failure. `sendThumbnailPreview` was also rewritten as a
+plain `async function` (the previous compiled-generator version had an unreachable
+branch that referenced an unassigned `msg` variable when `largeThumb` was falsy), and
+now accepts `quoted` in **either** position — `(jid, text, quoted, opts)` or
+`(jid, text, opts, quoted)` — since real bot code commonly writes the options object
+before the trailing `m`.
 
-**Before:** `require('baileys')` was called *inside* several hot-path functions
-(`getBaileys()` on every send call, and inside `Utils.getDevice`, `Utils.getStream`,
-`Utils.toBuffer`, `Utils.getAudioWaveform` on every call), relying on Node's module
-cache to make this cheap.
+### `sendSticker` — `packname`/`author` silently ignored
 
-**After:** each file now resolves `baileys` exactly **once**, at module load, into a
-top-level `baileys` binding:
+**Bug:** passing `{ packname, author }` had no effect on the sent sticker at all —
+those fields were documented in a code comment but never actually implemented anywhere.
+WhatsApp does not read sticker pack name/author from the message protobuf; it reads
+them from a **WebP EXIF metadata chunk** embedded in the image bytes themselves, so
+there was no way for the old code to have honored these options without writing that
+chunk.
 
-```js
-var baileys
-try { baileys = require('baileys') } catch (_a) { baileys = null }
-```
+**Fix:** implemented real EXIF injection — `buildStickerExif` constructs the
+WhatsApp-format JSON metadata blob (`sticker-pack-id`, `sticker-pack-name`,
+`sticker-pack-publisher`, `emojis`, `is-avatar-sticker`), and `tagStickerWebp` splices
+it into the WebP RIFF container (replacing any existing EXIF chunk), converting
+non-webp input to webp via `sharp` first if needed. Also fixed a dead-code bug where
+the primary (successful) send path returned an `undefined` message object instead of
+the actual generated message.
 
-Per-socket overrides (`Client(sock, { baileys: myFork })`) still take priority and are
-checked first — the module-level binding is only the fallback, so you can still swap
-baileys builds per-socket without touching the require path.
+### `sock.sendStickerPack is not a function`
 
-### `hasNonNullishProperty` dispatch pattern
+**Bug:** documented in the previous README but never implemented — calling it threw a
+plain `TypeError`.
 
-Added `Utils`-level `hasNonNullishProperty(obj, key)` (mirroring Baileys' own internal
-guard) and switched every payload-shape dispatcher in `lib/helpers/message.js` — the
-`sendAlbum` item normalizer/counter, `groupStatus`'s media dispatcher, and
-`sendStatusMentions`'s payload dispatcher — from ad-hoc truthy checks
-(`if (it.image)`) to explicit `else if (hasNonNullishProperty(it, 'image'))` chains.
+**Fix:** implemented. Sends each sticker in the pack tagged with the pack's shared
+`name`/`publisher`, one relayed message per item; a failed item is logged and skipped
+rather than aborting the rest of the pack.
 
-### New send helpers
+### `sendLivePhoto` — corrupted/invisible thumbnail
 
-Four methods were added to close gaps in the poll family:
+Two separate bugs, both now fixed:
 
-- **`sock.sendQuiz(jid, values, quoted?, opts)`** — newsletter-only quiz poll
-  (`opts.correctAnswer` required).
-- **`sock.sendPollResult(jid, name, votes, quoted?, opts?)`** — poll result snapshot
-  card (`votes: [{ name, voteCount }]`).
-- **`sock.sendQuizResult(jid, name, votes, quoted?, opts?)`** — same shape as
-  `sendPollResult`, tagged as a quiz result card.
-- **`sock.pollResult(jid, { name, votes: [{ name, count }] }, quoted?, opts?)`** —
-  neoxr-compatible alias that wraps `sendPollResult`.
+1. **ffmpeg seek-to-zero failure**: extracting a preview frame with
+   `extractVideoThumb(path, '00:00:00', ...)` frequently returned an empty or corrupt
+   buffer, since many encodes have no decodable keyframe at the exact start of the
+   file. Fixed by trying a short list of forward offsets (`00:00:01`, `00:00:00.5`,
+   `00:00:00`) and validating the result actually starts with a JPEG SOI marker
+   (`0xFFD8`) before accepting it.
+2. **"file gambar rusak" (corrupted image file)**: when frame extraction failed *and*
+   no offset produced a usable buffer, the old code silently fell back to uploading the
+   **video's own raw bytes**, mislabeled as an `imageMessage`. `prepareMedia` performs
+   no type validation, so this produced a message WhatsApp's client couldn't render —
+   an "image" that was actually MP4 data. Fixed by throwing a clear
+   `NexrayError('could not extract a valid frame from the video — pass { image }
+   explicitly instead')` in that case, so a broken thumbnail is now impossible: either
+   a real frame is used, or nothing is sent and the caller is told why. Remote video
+   **URLs** (previously skipped entirely — extraction only worked for local paths and
+   buffers) are now downloaded to a temp file first so ffmpeg can seek them too.
 
-`sendPoll` itself was also extended to accept the full native option set
-(`toAnnouncementGroup`, `endDate`, `hideVoter`, `canAddOption`) and the Baileys-native
-positional call shape (`sendPoll(jid, [values], m, opts)`), in addition to the
-neoxr-style options object it already supported.
+### `sendText` — `mentionAll` and `linkPreview: false` were no-ops
+
+**Bug:** both options existed as empty conditional blocks with a comment but did
+nothing — `{ mentionAll: true }` never actually mentioned anyone, and
+`{ linkPreview: false }` never actually disabled the preview.
+
+**Fix:** `mentionAll` now calls `sock.groupMetadata(jid)` (when `jid` is a group and
+the method exists) and mentions every participant. `linkPreview: false` now passes an
+explicit `linkPreview: null` into the generated content, which baileys' own
+`generateLinkPreviewIfRequired` treats as "skip generation" (distinct from `undefined`,
+which triggers auto-generation).
+
+### `sendFile` routing didn't use `hasNonNullishProperty`
+
+Converted `options.ptt`/`options.audio`/`options.document`/`options.image`/
+`options.video`/`options.ptv` existence checks in `sendFile`'s auto-routing to
+`hasNonNullishProperty(options, 'key')`, consistent with every other dispatch point in
+the file. Also removed a dead `lower` variable that was computed but never read.
+
+### Architecture: no more `sock.sendX = function (...) {...}`
+
+Every send helper (`sendText`, `sendImage`, `sendPoll`, … — 26 in total) is now a plain
+**named function declaration** (`function sendAudio(jid, ...) { ... }`) instead of an
+anonymous function assigned directly onto the socket. All of them are attached to the
+socket in a **single place**, at the end of `attachSendHelpers`, via one
+`Object.assign(sock, { sendText, sendImage, ... })` call. Benefits: real function names
+in stack traces (`at sendAudio (...)` instead of `at Object.<anonymous> (...)`),
+functions can call each other directly instead of through `sock.`, and there is exactly
+one line in the whole file where `sock.<name> = ...` happens.
+
+### Client options renamed (old names still work as fallbacks)
+
+| New name | Old name | Notes |
+|---|---|---|
+| `custom_id` | `messageIdPrefix` | prefixes generated message IDs |
+| `newsletterFollow` | `autoFollowNewsletter` | `string \| string[]`, opt-in only |
+| `engines: [baileys]` | `baileys: baileys` | first entry in the array wins |
+| `stealth` | *(new)* | `'ios' \| 'android' \| 'web' \| 'desktop' \| 'dekstop'` |
+
+`stealth` generates device-shaped message IDs matching Baileys' own `getDevice()`
+pattern-matching exactly (`3A`+18 for iOS, `3E`+20 for web, 21 raw hex for android,
+`3F`+16 for desktop) — see [Stealth](#stealth-device-shaped-message-ids) above.
+
+### Older fixes (carried over from the previous revision)
+
+- `require('baileys')` hoisted to module scope in every file (resolved once at load,
+  not per send call), with `engines`/per-socket overrides still checked first.
+- `hasNonNullishProperty(obj, key)` guard added and applied to `sendAlbum`'s item
+  normalizer/counter, `groupStatus`'s media dispatcher, and `sendStatusMentions`'s
+  payload dispatcher.
 
 ---
 
