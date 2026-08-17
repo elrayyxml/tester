@@ -33,6 +33,7 @@ npm i @nexray/lib baileys
   - [Sticker / sticker pack](#sticker--sticker-pack)
   - [Album](#album-min-2-media)
   - [Poll / Quiz / Poll result / Quiz result](#poll--quiz--poll-result--quiz-result)
+  - [Event](#event)
   - [Contact](#contact)
   - [Product](#product)
   - [Interactive / buttons / carousel](#interactive--buttons--carousel)
@@ -115,6 +116,7 @@ shape (`{ poll: {...} }`, `{ album: [...] }`, …) is unchanged.
 
 ```ts
 Client(sock, {
+  engines: [baileys],                // REQUIRED — your own require('baileys') instance, first entry wins
   custom_id?: string,                // default 'NEXRAY' — prefixes generated message IDs (was messageIdPrefix)
   newsletterFollow?: false | string | string[], // opt-in only (was autoFollowNewsletter)
   newsletterAnnotation?: false | {
@@ -127,10 +129,13 @@ Client(sock, {
   },
   bot?: (id: string) => boolean,     // used to detect bot/business-relayed message IDs
   stealth?: 'ios' | 'android' | 'web' | 'desktop' | 'dekstop', // device-shaped message IDs
-  engines?: object[],                // e.g. [require('baileys')] — first entry wins (was `baileys:`)
   updateProtoOnStartup?: boolean     // default true — reserved, does not block attach
 })
 ```
+
+`Client()` throws immediately if `engines` is missing or empty — there is no implicit
+`require('baileys')` fallback anywhere in this library, by design (see
+[Changelog](#changelog--fixes-in-this-revision)).
 
 Everything you pass is stored on `sock.__nexray` and merged with defaults — you can
 read it back at any time (`sock.__nexray.newsletterAnnotation`, etc.), and any extra
@@ -349,14 +354,32 @@ await sock.pollResult(m.chat, {
 | neoxr-style options object | `sendPoll(jid, 'Question?', { options: [...], multiselect }, m)` |
 | Plain values array + quoted | `sendPoll(jid, 'Question?', ['Yes','No'], m)` |
 
-Internally `sendPoll`/`sendQuiz`/`sendPollResult`/`sendQuizResult` build the **raw
-proto message directly** (`pollCreationMessage` / `pollCreationMessageV2` /
-`pollCreationMessageV3` / `pollCreationMessageV5` for creation, and
-`pollResultSnapshotMessage` / `pollResultSnapshotMessageV3` for results) via
-`generateWAMessageFromContent`, instead of relying on baileys' higher-level
-`generateWAMessageContent` to understand a `poll`/`pollResult` content-key. This makes
-polls work on **any** baileys build, including ones that don't ship those content-key
-branches — see [Changelog](#changelog--fixes-in-this-revision) for why this matters.
+Internally `sendPoll`/`sendQuiz` build a plain `{ poll: {...} }` content object, and
+`sendPollResult`/`sendQuizResult` build `{ pollResult: {...} }` — baileys' own
+`generateWAMessageContent` translates these into the correct
+`pollCreationMessage`/`pollCreationMessageV2`/`V3`/`V5` or
+`pollResultSnapshotMessage`/`V3` proto (and generates `messageSecret` for you).
+`sendQuizResult` is `sendPollResult` with `pollType: 1` — there's no separate code path
+for quiz results since the underlying payload shape is identical.
+
+### Event
+
+```js
+await sock.sendEvent(m.chat, {
+  name: 'Community Meetup',
+  description: 'Monthly sync',
+  startDate: new Date(Date.now() + 86400000),
+  endDate: new Date(Date.now() + 90000000),   // optional
+  location: { degreesLatitude: -6.2, degreesLongitude: 106.8, name: 'Jakarta' }, // optional
+  call: 'audio',                // optional — 'audio' | 'video'
+  isCancelled: false,           // optional
+  extraGuestsAllowed: true,     // optional
+  isScheduleCall: false         // optional
+}, m)
+```
+
+Uses baileys' native `event` content-key (`eventMessage`). `startDate` is required and
+accepts a `Date`, ISO string, or epoch ms (coerced to `Date` internally).
 
 ### Contact
 
@@ -720,140 +743,167 @@ implementation details and may change without a major version bump.
 
 ## Changelog / fixes in this revision
 
-### Poll / poll result / quiz messages sent as invisible "raw" payloads
+### Everything broke: `generateWAMessage is not a function`, `prepareWAMessageMedia is not a function`, `extractVideoThumb / generateThumbnail both unavailable`
 
-**Bug:** `sendPollResult`, `sendQuizResult`, and the neoxr-style `pollResult` alias threw
-`Error: Invalid media type` from `prepareWAMessageMedia`, and `sendPoll` sent a message
-that relayed successfully but rendered as nothing on the recipient's screen. The cause:
-these helpers built a `{ poll: {...} }` / `{ pollResult: {...} }` **content-key** object
-and asked baileys' own `generateWAMessageContent` to translate it into the correct
-proto — but not every installed baileys build recognizes those content-keys. When it
-doesn't, `generateWAMessageContent`'s `if/else if` chain falls all the way through to
-its final `else` branch, which assumes the object must be raw media, and tries (and
-fails) to upload it as one.
+**Bug:** in the previous revision's `engines`-only refactor, `attachSendHelpers`
+destructured `generateWAMessage` and `generateWAMessageFromContent` into local
+variables named `baileys.generateWAMessage`/`.generateWAMessageFromContent`, but a
+follow-up edit that added the `baileysFn()` safety wrapper accidentally **renamed the
+main engine reference variable** without updating every place in the file that still
+referred to the old name `baileys.xxx`. Since JavaScript variable declarations are
+function-scoped, this didn't throw a syntax error — it silently created a
+`ReferenceError`-prone gap where `sendText`, `sendPoll`, `sendMetaMsg`, `sendSticker`,
+and `sendLivePhoto` all called into what was effectively an undefined reference at
+runtime, surfacing as different, confusing `TypeError`s depending on which function
+each one happened to touch first.
 
-**Fix:** poll and poll-result messages now build the **raw WhatsApp proto object
-directly** — `pollCreationMessage` / `pollCreationMessageV2` / `pollCreationMessageV3`
-/ `pollCreationMessageV5` for creation, `pollResultSnapshotMessage` /
-`pollResultSnapshotMessageV3` for results — and hand it straight to
-`generateWAMessageFromContent`, bypassing `generateWAMessageContent`'s content-key
-translation entirely. This works identically regardless of which baileys build is
-installed, since it no longer depends on that translation layer supporting polls at all.
+**Fix:** the engine reference is resolved once per `attachSendHelpers(sock)` call into
+a single `baileys` variable (a **live object reference** — not a snapshot of
+individual functions), and every call site — `baileys.prepareWAMessageMedia(...)`,
+`baileys.extractVideoThumb(...)`, `baileys.generateThumbnail(...)`,
+`baileys.STORIES_JID`, and so on — reads straight through that same reference with no
+local reimplementation of anything baileys itself provides.
+`generateWAMessage`/`generateWAMessageFromContent` additionally go through a
+`baileysFn(sock, name)` helper that re-resolves the function fresh on every call and
+throws a clear, specific error (naming exactly which function is missing and why) if
+it's ever genuinely absent from the configured engine — instead of a bare
+`TypeError: X is not a function` several stack frames deep.
 
-### `sendThumbnailPreview` — false "thumbnail required" error
+`getBaileys(sock)` also now transparently unwraps one common ESM/CJS interop shape:
+if the object passed via `engines: [baileys]` doesn't have `generateWAMessage` at the
+top level but does have it under `.default` (which some bundlers/loaders produce for
+`baileys`), that `.default` object is used automatically.
 
-**Bug:** passing a perfectly valid `thumbnail: 'https://...'` URL still threw
-`NexrayError: thumbnail required when largeThumb: true`. The internal
-`resolveToBuffer()` helper swallowed **every** failure mode — network timeout, non-2xx
-response, DNS failure — into a silent `null`, so a real fetch failure was reported as a
-generic "you forgot to pass a thumbnail" message instead of the actual cause.
+### `sendLivePhoto` — no local thumbnail-extraction reimplementation
 
-**Fix:** `resolveToBuffer()` now throws a `NexrayError` with the real reason
-(`HTTP 403 Forbidden`, the underlying fetch error message, or "local file not found")
-instead of returning `null` on failure. `sendThumbnailPreview` was also rewritten as a
-plain `async function` (the previous compiled-generator version had an unreachable
-branch that referenced an unassigned `msg` variable when `largeThumb` was falsy), and
-now accepts `quoted` in **either** position — `(jid, text, quoted, opts)` or
-`(jid, text, opts, quoted)` — since real bot code commonly writes the options object
-before the trailing `m`.
+Per explicit request, `extractLiveThumb` now calls `baileys.generateThumbnail(path,
+'video', {})` and `baileys.extractVideoThumb(path, offset, size)` directly with zero
+local video-frame-extraction logic of its own — it only decides *which* baileys
+function to try and in what order (`extractVideoThumb` first for quality/retries if
+present, `generateThumbnail` as the guaranteed-available fallback), never reimplements
+what either of them does.
 
-### `sendSticker` — `packname`/`author` silently ignored
+### `engines: [baileys]` is now required — no more implicit `require('baileys')`
 
-**Bug:** passing `{ packname, author }` had no effect on the sent sticker at all —
-those fields were documented in a code comment but never actually implemented anywhere.
-WhatsApp does not read sticker pack name/author from the message protobuf; it reads
-them from a **WebP EXIF metadata chunk** embedded in the image bytes themselves, so
-there was no way for the old code to have honored these options without writing that
-chunk.
+**Before:** the library called `require('baileys')` on its own as a last-resort
+fallback if no engine was configured, relying on it being installed as a peer
+dependency in the consumer's `node_modules`.
 
-**Fix:** implemented real EXIF injection — `buildStickerExif` constructs the
-WhatsApp-format JSON metadata blob (`sticker-pack-id`, `sticker-pack-name`,
-`sticker-pack-publisher`, `emojis`, `is-avatar-sticker`), and `tagStickerWebp` splices
-it into the WebP RIFF container (replacing any existing EXIF chunk), converting
-non-webp input to webp via `sharp` first if needed. Also fixed a dead-code bug where
-the primary (successful) send path returned an `undefined` message object instead of
-the actual generated message.
+**After:** `require('baileys')` does not appear anywhere in this library anymore.
+`Client(sock, options)` now **requires** `options.engines: [baileys]` and throws
+immediately if it's missing:
 
-### `sock.sendStickerPack is not a function`
+```js
+const baileys = require('baileys')
+Client(sock, { engines: [baileys] })
+```
 
-**Bug:** documented in the previous README but never implemented — calling it threw a
-plain `TypeError`.
+This also registers the engine globally (via `Utils.setEngine`), so standalone
+`Utils.getDevice()` / `Utils.getStream()` / `Utils.toBuffer()` /
+`Utils.getAudioWaveform()` calls work without needing socket access — call
+`Utils.setEngine(baileys)` yourself if you need those before calling `Client()`.
 
-**Fix:** implemented. Sends each sticker in the pack tagged with the pack's shared
-`name`/`publisher`, one relayed message per item; a failed item is logged and skipped
-rather than aborting the rest of the pack.
+### Poll / poll result messages sent as invisible "raw" payloads — corrected root cause
 
-### `sendLivePhoto` — corrupted/invisible thumbnail
+The previous revision's notes attributed this to baileys not supporting the
+`poll`/`pollResult` content-keys at all, and worked around it by building raw proto
+objects directly. That diagnosis was based on an unrepresentative test double — the
+**actual** installed baileys build (a patched fork, confirmed via its own source)
+supports `poll` and `pollResult` content-keys natively, including `messageSecret`
+generation and mention/`nonJidMentions` handling. The real, more subtle bug was
+elsewhere (see `sendSticker` below) — polls were structurally fine.
 
-Two separate bugs, both now fixed:
+**Fix:** `sendPoll` / `sendQuiz` / `sendPollResult` / `sendQuizResult` are back to the
+simple, thin approach — building a plain `{ poll: {...} }` / `{ pollResult: {...} }`
+content object and letting baileys' own `generateWAMessageContent` build the correct
+`pollCreationMessage*` / `pollResultSnapshotMessage*` proto and `messageSecret`. This
+is less code, matches how the installed baileys fork actually works, and
+`sendQuizResult` is now just `sendPollResult` with `pollType: 1` — there's no separate
+quiz-result code path since the underlying payload is identical.
 
-1. **ffmpeg seek-to-zero failure**: extracting a preview frame with
-   `extractVideoThumb(path, '00:00:00', ...)` frequently returned an empty or corrupt
-   buffer, since many encodes have no decodable keyframe at the exact start of the
-   file. Fixed by trying a short list of forward offsets (`00:00:01`, `00:00:00.5`,
-   `00:00:00`) and validating the result actually starts with a JPEG SOI marker
-   (`0xFFD8`) before accepting it.
-2. **"file gambar rusak" (corrupted image file)**: when frame extraction failed *and*
-   no offset produced a usable buffer, the old code silently fell back to uploading the
-   **video's own raw bytes**, mislabeled as an `imageMessage`. `prepareMedia` performs
-   no type validation, so this produced a message WhatsApp's client couldn't render —
-   an "image" that was actually MP4 data. Fixed by throwing a clear
-   `NexrayError('could not extract a valid frame from the video — pass { image }
-   explicitly instead')` in that case, so a broken thumbnail is now impossible: either
-   a real frame is used, or nothing is sent and the caller is told why. Remote video
-   **URLs** (previously skipped entirely — extraction only worked for local paths and
-   buffers) are now downloaded to a temp file first so ffmpeg can seek them too.
+### `sendText` — `mentionAll` now uses `nonJidMentions`, not a manually-built `mentionedJid`
 
-### `sendText` — `mentionAll` and `linkPreview: false` were no-ops
+**Bug:** `{ mentionAll: true }` fetched `sock.groupMetadata(jid)` and manually built a
+`contextInfo.mentionedJid` array from every participant's JID. This worked, but sent a
+large, LID-format-fragile array over the wire instead of the clean mechanism WhatsApp
+actually expects for "@all".
 
-**Bug:** both options existed as empty conditional blocks with a comment but did
-nothing — `{ mentionAll: true }` never actually mentioned anyone, and
-`{ linkPreview: false }` never actually disabled the preview.
+**Fix:** `mentions` / `mentionAll` are now passed straight through as **content-level**
+keys (siblings of `text`, not nested in `contextInfo`), because baileys'
+`generateWAMessageContent` already resolves them itself — `mentionAll: true` becomes
+`contextInfo.nonJidMentions = 1`, and `mentions: [...]` becomes
+`contextInfo.mentionedJid`. No `groupMetadata` fetch needed anymore.
 
-**Fix:** `mentionAll` now calls `sock.groupMetadata(jid)` (when `jid` is a group and
-the method exists) and mentions every participant. `linkPreview: false` now passes an
-explicit `linkPreview: null` into the generated content, which baileys' own
-`generateLinkPreviewIfRequired` treats as "skip generation" (distinct from `undefined`,
-which triggers auto-generation).
+### `sendSticker` — URL input silently failed with "could not resolve media to a buffer"
 
-### `sendFile` routing didn't use `hasNonNullishProperty`
+**Bug:** `prepareStickerBuffer` pre-wrapped string input through `normalizeMediaInput`,
+turning a plain URL string into `{ url: '...' }` *before* calling `resolveToBuffer`.
+But `resolveToBuffer` only handled raw strings and Buffers — any object input
+(including that `{ url }` wrapper) hit an early `return null` with no attempt to fetch
+it at all, which then surfaced as a generic "could not resolve media to a buffer"
+error with no indication a double-wrapping bug was the cause.
 
-Converted `options.ptt`/`options.audio`/`options.document`/`options.image`/
-`options.video`/`options.ptv` existence checks in `sendFile`'s auto-routing to
-`hasNonNullishProperty(options, 'key')`, consistent with every other dispatch point in
-the file. Also removed a dead `lower` variable that was computed but never read.
+**Fix:** `resolveToBuffer` now unwraps `{ url }` / `{ path }` objects back into a plain
+string before deciding whether to fetch or read from disk, and the sticker call site
+passes its input directly instead of pre-wrapping it. URL, path, and Buffer sticker
+input all resolve correctly now.
 
-### Architecture: no more `sock.sendX = function (...) {...}`
+### `sendLivePhoto` — "extractVideoThumb unavailable" even though baileys was installed
 
-Every send helper (`sendText`, `sendImage`, `sendPoll`, … — 26 in total) is now a plain
-**named function declaration** (`function sendAudio(jid, ...) { ... }`) instead of an
-anonymous function assigned directly onto the socket. All of them are attached to the
-socket in a **single place**, at the end of `attachSendHelpers`, via one
-`Object.assign(sock, { sendText, sendImage, ... })` call. Benefits: real function names
-in stack traces (`at sendAudio (...)` instead of `at Object.<anonymous> (...)`),
-functions can call each other directly instead of through `sock.`, and there is exactly
-one line in the whole file where `sock.<name> = ...` happens.
+**Bug:** the installed baileys build only re-exports `generateThumbnail` on its main
+module barrel; the lower-level `extractVideoThumb` (used internally by
+`generateThumbnail`) lives in `messages-media.js` and isn't re-exported separately in
+every build. Checking `baileys.extractVideoThumb` directly returned `undefined`, and
+the previous code treated that as a hard failure with no fallback.
 
-### Client options renamed (old names still work as fallbacks)
+**Fix:** `sendLivePhoto`'s frame extraction now tries `baileys.extractVideoThumb`
+first if it happens to be available (better quality — multiple seek-offset retries,
+controllable size), and falls back to `baileys.generateThumbnail(path, 'video', {})` —
+which **is** always exported, since baileys uses it internally for every video
+upload — decoding its returned base64 thumbnail. Only throws if both paths are
+unavailable or fail to produce a valid JPEG.
 
-| New name | Old name | Notes |
-|---|---|---|
-| `custom_id` | `messageIdPrefix` | prefixes generated message IDs |
-| `newsletterFollow` | `autoFollowNewsletter` | `string \| string[]`, opt-in only |
-| `engines: [baileys]` | `baileys: baileys` | first entry in the array wins |
-| `stealth` | *(new)* | `'ios' \| 'android' \| 'web' \| 'desktop' \| 'dekstop'` |
+### `sendEvent` — new
 
-`stealth` generates device-shaped message IDs matching Baileys' own `getDevice()`
-pattern-matching exactly (`3A`+18 for iOS, `3E`+20 for web, 21 raw hex for android,
-`3F`+16 for desktop) — see [Stealth](#stealth-device-shaped-message-ids) above.
+Added, using baileys' native `event` content-key:
 
-### Older fixes (carried over from the previous revision)
+```js
+await sock.sendEvent(m.chat, {
+  name: 'Community Meetup',
+  description: 'Monthly sync',
+  startDate: new Date(Date.now() + 86400000),
+  endDate: new Date(Date.now() + 90000000),   // optional
+  location: { degreesLatitude: -6.2, degreesLongitude: 106.8, name: 'Jakarta' }, // optional
+  call: 'audio',                // optional — 'audio' | 'video'
+  isCancelled: false,           // optional
+  extraGuestsAllowed: true,     // optional
+  isScheduleCall: false         // optional
+}, m)
+```
 
-- `require('baileys')` hoisted to module scope in every file (resolved once at load,
-  not per send call), with `engines`/per-socket overrides still checked first.
-- `hasNonNullishProperty(obj, key)` guard added and applied to `sendAlbum`'s item
-  normalizer/counter, `groupStatus`'s media dispatcher, and `sendStatusMentions`'s
-  payload dispatcher.
+`startDate` is required and coerced to a `Date` if you pass an ISO string or epoch
+ms — baileys calls `.getTime()` on it internally with no null-check, so this avoids a
+crash on a loosely-typed input.
+
+### Older fixes (carried over from previous revisions)
+
+- `sendThumbnailPreview` accepts `quoted` in either the 3rd or 4th position (real bot
+  code often writes the options object before the trailing `m`), fixed a dead-code path
+  that referenced an unassigned `msg` when `largeThumb` was falsy, and
+  `resolveToBuffer` now throws real, descriptive errors instead of silently returning
+  `null` on network/file failures.
+- `sendSticker` `packname`/`author`/`emojis` are embedded into the WebP's EXIF chunk
+  (the only place WhatsApp actually reads sticker metadata from), and
+  `sendStickerPack` was implemented.
+- `sendContact` supports both personal and WhatsApp Business-style vCards
+  (`TITLE`, `ADR`, `X-WA-BIZ-NAME`, `X-WA-BIZ-DESCRIPTION`).
+- `sendFile`'s type-routing checks converted to `hasNonNullishProperty`.
+- All ~26 send helpers are named function declarations attached once via a single
+  `Object.assign(sock, {...})`, instead of individual `sock.sendX = function` assignments.
+- Client options renamed with backward-compatible fallbacks: `custom_id`
+  (`messageIdPrefix`), `newsletterFollow` (`autoFollowNewsletter`), `engines`
+  (`baileys`), plus new `stealth` (`ios`/`android`/`web`/`desktop`/`dekstop`) for
+  device-shaped message IDs.
 
 ---
 
