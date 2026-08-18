@@ -24,13 +24,10 @@
     "baileys",
     "nexray"
   ],
-  "author": "nexray",
+  "author": "@nexray - ElrayyXml",
   "license": "ISC",
   "engines": {
-    "node": ">=18"
-  },
-  "peerDependencies": {
-    "baileys": ">=6.7.0 || ^7.0.0-rc"
+    "node": ">=20"
   },
   "dependencies": {
     "mime-types": "^2.1.35",
