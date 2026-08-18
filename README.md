@@ -52,45 +52,6 @@ npm i @nexray/lib baileys
 
 ---
 
-## Quick start
-
-```js
-const { makeWASocket } = require('baileys')
-const { Client, Utils } = require('@nexray/lib')
-// ESM: import { Client, Utils } from '@nexray/lib'
-
-const sock = makeWASocket({ /* auth & config */ })
-
-Client(sock, {
-  messageIdPrefix: 'NEXRAY',
-  autoFollowNewsletter: false, // or '123@newsletter' | string[]
-  newsletterAnnotation: {
-    newsletterJid: '1211111111111@newsletter',
-    newsletterName: '@nexray',
-    accessibilityText: '@nexray',
-    contentType: 1
-    // polygonVertices optional (default baked in)
-  },
-  bot: (id) =>
-    (id.startsWith('3EB0') && id.length === 40) ||
-    id.startsWith('BAE') ||
-    /[-]/.test(id)
-})
-
-// sock now has sock.sendText, sock.sendImage, sock.sendPoll, ... etc.
-sock.ev.on('messages.upsert', async ({ messages }) => {
-  const m = messages[0]
-  if (!m.message) return
-  await sock.reply(m.key.remoteJid, 'pong', m)
-})
-```
-
-`Client(sock, options)` is a **pure attach** — it does not register any event
-listeners for you (other than the optional `autoFollowNewsletter` timer) and does not
-touch your auth/connection logic. Call it once, right after `makeWASocket(...)`.
-
----
-
 ## How it works
 
 Every `sock.sendX` helper follows the same three-step shape:
