@@ -551,6 +551,30 @@ await sock.sendInteractive(
 
 # sendInteractive Payload
 
+The `media.location` payload is intentionally preserved as a **location header**. The library does not convert `media.location.jpegThumbnail` into a standalone `imageMessage`.
+
+A location header may contain:
+
+```js
+media: {
+  location: {
+    degreesLatitude: 0,
+    degreesLongitude: 0,
+    name: 'Location title',
+    address: 'Optional address',
+    url: 'https://example.com',
+    jpegThumbnail: './database/assets/allmenu.jpg',
+    image: './media/header.jpg',
+    video: './media/header.mp4',
+    contextInfo: {
+      mentionedJid: ['628123456789@s.whatsapp.net']
+    }
+  }
+}
+```
+
+`jpegThumbnail` remains part of `locationMessage`. When `image` or `video` is supplied, the corresponding media is prepared without discarding the location payload. `contextInfo` can be supplied at the location level or at the interactive-message level.
+
 The following payload is supported directly:
 
 ```js

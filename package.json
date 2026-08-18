@@ -1,7 +1,7 @@
 {
   "name": "@nexray/lib",
   "version": "0.1.0",
-  "description": "Lightweight Baileys helper — serialize + relay-based send helpers.",
+  "description": "Lightweight Baileys send helpers.",
   "main": "./lib/index.js",
   "module": "./lib/index.mjs",
   "files": [
