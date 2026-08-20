@@ -1,2235 +1,962 @@
 # @nexray/lib
 
-A lightweight, readable helper layer for Baileys-based WhatsApp applications.
+Simplicity WhatsApp Baileys Engine & Helper Library.
 
-`@nexray/lib` provides a small set of high-level socket helpers while keeping Baileys as the message-generation and media-processing engine. The library does not bundle Baileys and does not implicitly load it.
+`@nexray/lib` is a clean, modular, engine-injected message helper layer on top of
+Baileys. It wraps an existing Baileys socket, injects a centralized
+`relayMessage` pipeline, and exposes a consistent set of message helpers.
 
-The public API is intentionally small:
-
-```js
-const { Client, Utils } = require('@nexray/lib')
-```
-
-ESM:
-
-```js
-import { Client, Utils } from '@nexray/lib'
-```
+- ESM primary, CommonJS secondary (single entry, `require(esm)`, Node >= 20.19 / >= 22.12)
+- No bundled Baileys — you provide the engine
+- Every helper routes through one transport pipeline
+- Centralized message ID, context info, newsletter annotation, and error handling
 
 ---
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Design Principles](#design-principles)
-- [Requirements](#requirements)
 - [Installation](#installation)
+- [Requirements](#requirements)
 - [Initialization](#initialization)
+- [Configuration](#configuration)
 - [Engine Architecture](#engine-architecture)
-- [Public API](#public-api)
 - [Message Helpers](#message-helpers)
-  - [sendText](#sendtext)
-  - [sendImage](#sendimage)
-  - [sendVideo](#sendvideo)
-  - [sendAudio](#sendaudio)
-  - [sendDocument](#senddocument)
-  - [sendSticker](#sendsticker)
-  - [sendAlbum](#sendalbum)
-  - [sendInteractive](#sendinteractive)
-  - [sendCarousel](#sendcarousel)
-  - [sendMetaMsg](#sendmetamsg)
-  - [sendAIRich](#sendairich)
-  - [sendPoll](#sendpoll)
-  - [sendQuiz](#sendquiz)
-  - [sendPollResult](#sendpollresult)
-  - [sendQuizResult](#sendquizresult)
-  - [sendEvent](#sendevent)
-  - [sendContact](#sendcontact)
-  - [sendProduct](#sendproduct)
-  - [sendLivePhoto](#sendlivephoto)
-  - [sendThumbnailPreview](#sendthumbnailpreview)
-  - [copyNForward](#copynforward)
-- [Interactive Payload Reference](#interactive-payload-reference)
-- [AI Rich Payload Reference](#ai-rich-payload-reference)
-- [Media Handling](#media-handling)
-- [Quoted Messages](#quoted-messages)
-- [Mentions](#mentions)
-- [Newsletter Annotation](#newsletter-annotation)
+- [Newsletter](#newsletter)
 - [Utils](#utils)
 - [Error Handling](#error-handling)
-- [Error Codes](#error-codes)
 - [Project Structure](#project-structure)
-- [Compatibility](#compatibility)
 - [Development](#development)
-- [Changelog](#changelog)
 - [License](#license)
-
----
-
-## Overview
-
-The library is designed for projects that already have a Baileys socket and want a clean helper layer around it.
-
-The architecture follows three rules:
-
-1. Baileys remains responsible for protocol-specific message generation.
-2. `@nexray/lib` adds ergonomic helpers instead of reimplementing Baileys internals.
-3. The socket receives helper methods without replacing the original Baileys API.
-
-Example:
-
-```js
-const baileys = require('baileys')
-const { Client } = require('@nexray/lib')
-
-const sock = Client(rawSocket, {
-  engines: [baileys]
-})
-
-await sock.sendText(
-  '628123456789@s.whatsapp.net',
-  'Hello from Nexray'
-)
-```
-
----
-
-## Design Principles
-
-### Readable source
-
-The package is distributed as normal JavaScript. There is no intentional source obfuscation.
-
-### Explicit Baileys engine
-
-The package does not perform an implicit:
-
-```js
-require('baileys')
-```
-
-The consumer supplies the exact Baileys build that should be used.
-
-### Thin wrappers
-
-Media generation, protobuf generation and protocol-specific serialization remain delegated to the configured Baileys engine whenever the engine provides the required primitive.
-
-### Consistent validation
-
-Invalid arguments use `NexrayError` with a stable error code.
-
-### Predictable payloads
-
-High-level helpers normalize input into standard Baileys message structures before the message is relayed.
-
----
-
-## Requirements
-
-- Node.js 20 or newer
-- A compatible Baileys build
-- A connected Baileys socket
-- `sharp` when image processing or thumbnail generation is required
-
-The library itself does not establish a WhatsApp connection.
 
 ---
 
 ## Installation
 
-Install the library:
-
 ```bash
 npm install @nexray/lib
 ```
 
-Install Baileys in the application:
-
 ```bash
-npm install baileys
+npm install @nexray/lib @whiskeysockets/baileys
 ```
 
-If the application uses another Baileys-compatible fork:
+## Requirements
 
-```bash
-npm install <your-baileys-package>
-```
-
-The selected module must expose the Baileys primitives required by the helpers you use.
-
----
+- Node.js `>= 20.19` (or `>= 22.12` for the CommonJS entry)
+- A Baileys socket (or compatible engine) provided at runtime
 
 ## Initialization
 
-### CommonJS
+ESM:
 
 ```js
-const baileys = require('baileys')
-const { Client } = require('@nexray/lib')
+import { Client, Utils } from '@nexray/lib'
+import makeWASocket from '@whiskeysockets/baileys'
 
-const sock = Client(rawSocket, {
-  engines: [baileys]
+const sock = Client(makeWASocket({ ... }), {
+    engines: [Baileys],
+    custom_id: 'mybot',
+    stealth: 'ios',
+    debug: true
 })
+
+await sock.sendText('6281234567890@s.whatsapp.net', 'halo dunia')
 ```
 
-### ESM
+CommonJS:
 
 ```js
-import baileys from 'baileys'
-import { Client } from '@nexray/lib'
-
-const sock = Client(rawSocket, {
-  engines: [baileys]
-})
+const { Client, Utils } = require('@nexray/lib')
 ```
 
-### Options
+## Configuration
+
+| Option | Type | Required | Description |
+| --- | --- | --- | --- |
+| `engines` | `Array` | Yes | Engines used by the library. The first entry is the primary engine. |
+| `bot` | `Function \| boolean \| null` | No | Detector for bot-generated message IDs. |
+| `custom_id` | `string \| null` | No | Prefix for local message ID helpers. |
+| `stealth` | `string \| null` | No | Message ID device format: `ios`, `android`, `web`, `desktop`. |
+| `newsletterAnnotation` | `object \| null` | No | Default newsletter media annotation. |
+| `newsletterFollow` | `string \| string[] \| null` | No | Newsletter JIDs to follow on init. |
+| `debug` | `boolean` | No | Enable internal debug logging. |
+
+### Bot ID detection
 
 ```js
-Client(sock, {
-  engines: [baileys],
-  messageIdPrefix: 'NEXRAY',
-  stealth: null,
-  newsletterAnnotation: null,
-  autoFollowNewsletter: null
-})
-```
-
-| Option | Type | Description |
-|---|---|---|
-| `engines` | `Array` | Baileys engine. The first entry is used. |
-| `messageIdPrefix` | `string` | Prefix used by the local message ID helper. |
-| `custom_id` | `string` | Alias of `messageIdPrefix`. |
-| `stealth` | `string\|null` | Optional stealth identifier configuration. |
-| `newsletterAnnotation` | `object\|null` | Default newsletter media annotation. |
-| `autoFollowNewsletter` | `string\|string[]\|null` | Optional newsletter follow configuration. |
-
-`engines` is required.
-
----
-
-# Engine Architecture
-
-The configured Baileys module is stored on:
-
-```js
-sock.__nexray.baileys
-```
-
-Internal helpers resolve Baileys primitives through the configured engine.
-
-Examples include:
-
-```js
-generateWAMessage
-generateWAMessageFromContent
-prepareWAMessageMedia
-getDevice
-getStream
-toBuffer
-getAudioWaveform
-```
-
-This prevents the helper package from silently using a different Baileys version than the application.
-
----
-
-# Public API
-
-The public exports are:
-
-```js
-const {
-  Client,
-  Utils
-} = require('@nexray/lib')
-```
-
-Internal modules under:
-
-```text
-lib/helpers/
-lib/core/
-lib/constant/
-```
-
-are implementation details.
-
----
-
-# Message Helpers
-
-## sendText
-
-### Signature
-
-```js
-await sock.sendText(jid, text, quoted?, options?)
-```
-
-### Example
-
-```js
-await sock.sendText(
-  '628123456789@s.whatsapp.net',
-  'Hello world'
-)
-```
-
-### With mention
-
-```js
-await sock.sendText(
-  jid,
-  `Hello @${sender.split('@')[0]}`,
-  null,
-  {
-    mentions: [sender]
-  }
-)
-```
-
-### Options
-
-```js
-{
-  mentions: ['628123456789@s.whatsapp.net'],
-  mentionedJid: ['628123456789@s.whatsapp.net'],
-  mentionAll: false,
-  expiration: 0,
-  linkPreview: true,
-  contextInfo: {}
+bot: (id) => {
+    return (
+        (id.startsWith('3EB0') && id.length === 40) ||
+        id.startsWith('BAE') ||
+        /[-]/.test(id)
+    )
 }
 ```
 
----
+Behavior: `null` disables detection, a function is called with the message ID,
+`true` treats every ID as bot-generated, `false` treats none as bot-generated.
+Detection is safe against `undefined`, `null`, non-string IDs, and malformed keys.
 
-## sendImage
+### Stealth message IDs
 
-### Signature
+`stealth` shapes the generated message ID to look like a specific device:
 
-```js
-await sock.sendImage(jid, image, caption?, quoted?, options?)
+- `ios` → `3A` + 18 random chars
+- `web` → `3E` + 20 random chars
+- `android` → 32 random chars
+- `desktop` → `3F` + 18 random chars
+
+Message ID priority: explicit `options.messageId` → `custom_id` prefix →
+stealth format → default `3EB0` + 36 hex.
+
+## Engine Architecture
+
+The engine must expose the Baileys message/media API. The library never imports
+Baileys itself — the socket is the transport and the engine provides the
+protocol builders:
+
+- `generateWAMessage`
+- `generateWAMessageFromContent`
+- `prepareWAMessageMedia`
+- `proto`
+- `getDevice`, `getStream`, `toBuffer`, `getAudioWaveform`, `generateThumbnail`
+
+All message helpers generate their payload first, then route it through the
+centralized pipeline:
+
+```
+sendText()
+   ↓
+Message Builder
+   ↓
+WAMessage Payload
+   ↓
+Message Normalizer
+   ↓
+relayMessage()
+   ↓
+Baileys Socket
 ```
 
-### Payload
+`relayMessage()` centralizes message ID generation, additional nodes,
+additional attributes, newsletter annotation, and recipient configuration.
+Engine-dependent options such as `recipientOverrides` and `specificRecipient`
+are passed through when present.
+
+## Message Helpers
+
+Every helper is attached to the socket: `sock.sendText(...)`, and is also
+exported as a standalone function taking the socket as the first argument.
+
+### sendText
 
 ```js
-await sock.sendImage(
-  jid,
-  './media/image.jpg',
-  'Image caption',
-  quotedMessage,
-  {
-    mentions: [],
-    jpegThumbnail: null
-  }
-)
+await sock.sendText(remoteJid, text, quoted?, options?)
 ```
 
-Supported media input:
+Payload:
 
 ```js
-Buffer
+await sock.sendText('6281234567890@s.whatsapp.net', 'halo dunia', quotedMsg, {
+    ai: false,                       // label as AI generated (private chats only)
+    mentionsAll: false,              // set contextInfo.nonJidMentions = 1
+    mentions: ['62811111111@s.whatsapp.net'],
+    mentionedJid: ['62811111111@s.whatsapp.net'], // alias of mentions
+    contextInfo: { forwardingScore: 1 },
+    expiration: 86400,               // ephemeral seconds
+    linkPreview: true,
+    messageId: 'custom-id',
+    additionalNodes: NODES.poll_creation,
+    additionalAttributes: { epoch: '1' }
+})
 ```
 
+Mentions accept both `mentions: []` and `mentionedJid: []` (aliases).
+`mentionsAll: true` sets `contextInfo.nonJidMentions = 1` (mention-all without a
+JID list) instead of resolving group participants. Combine with `mentions` to
+mention specific JIDs alongside the mention-all flag.
+
+### reply
+
 ```js
-'./media/image.jpg'
+await sock.reply(remoteJid, text, quoted, options?)
 ```
 
+Shortcut for quoting — requires a `quoted` message:
+
 ```js
-'https://example.com/image.jpg'
+await sock.reply('6281234567890@s.whatsapp.net', 'balasan', incomingMsg)
 ```
 
+### sendReact
+
 ```js
-{
-  url: './media/image.jpg'
-}
+await sock.sendReact(remoteJid, emoji, key, options?)
 ```
 
----
-
-## sendVideo
-
-### Signature
+Payload:
 
 ```js
-await sock.sendVideo(jid, video, caption?, quoted?, options?)
+await sock.sendReact(remoteJid, emoji, key, options?)
 ```
 
-### Example
+`key` menerima `m.key`, pesan utuh (`m`), atau string message ID:
 
 ```js
-await sock.sendVideo(
-  jid,
-  './media/video.mp4',
-  'Video caption',
-  quotedMessage
-)
+// format: (jid, emoji, m.key, options?)
+await sock.sendReact('6281234567890@s.whatsapp.net', '👍', {
+    id: '3EB0ABC...',                        // the message key to react to
+    remoteJid: '6281234567890@s.whatsapp.net',
+    fromMe: false
+}, { additionalNodes: [...] })
+
+// pesan utuh juga jalan (key diambil dari .key)
+await sock.sendReact('6281234567890@s.whatsapp.net', '👍', m, options?)
+
+// atau cukup string ID
+await sock.sendReact('6281234567890@s.whatsapp.net', '👍', '3EB0ABC...')
 ```
 
-Video options may include:
+### sendImage / sendVideo
 
 ```js
-{
-  ptv: false,
-  gifPlayback: false
-}
+await sock.sendImage(remoteJid, image, caption?, quoted?, options?)
+await sock.sendVideo(remoteJid, video, caption?, quoted?, options?)
 ```
 
----
-
-## sendAudio
-
-### Signature
+Payload:
 
 ```js
-await sock.sendAudio(jid, audio, quoted?, options?)
+await sock.sendImage('6281234567890@s.whatsapp.net', Buffer.from(...), 'caption', quotedMsg, {
+    mentions: ['62811111111@s.whatsapp.net'],
+    mentionsAll: true,
+    expiration: 86400
+})
+await sock.sendVideo('6281234567890@s.whatsapp.net', './video.mp4', 'caption', null, {
+    ptv: true,       // video note
+    gif: true        // animated GIF
+})
 ```
 
-Example:
+Media input: `Buffer`, local path, or URL.
+
+### sendAudio
 
 ```js
-await sock.sendAudio(
-  jid,
-  './media/audio.mp3',
-  quotedMessage,
-  {
-    ptt: true,
+await sock.sendAudio(remoteJid, audio, quoted?, options?)
+```
+
+Payload:
+
+```js
+await sock.sendAudio('6281234567890@s.whatsapp.net', './voice.ogg', null, {
+    ptt: true,                  // voice note — waveform via engine.getAudioWaveform
     mimetype: 'audio/ogg; codecs=opus'
-  }
-)
+})
 ```
 
----
-
-## sendDocument
-
-### Signature
+### sendFile
 
 ```js
-await sock.sendDocument(jid, document, fileName?, quoted?, options?)
+await sock.sendFile(remoteJid, file, quoted?, options?)
 ```
 
-Example:
+Payload:
 
 ```js
-await sock.sendDocument(
-  jid,
-  './files/document.pdf',
-  'document.pdf',
-  quotedMessage
-)
+await sock.sendFile('6281234567890@s.whatsapp.net', './report.pdf', null, {
+    fileName: 'laporan.pdf',
+    mimetype: 'application/pdf',
+    caption: 'Laporan bulanan'
+})
 ```
 
----
-
-## sendSticker
-
-### Signature
+### sendSticker
 
 ```js
-await sock.sendSticker(jid, sticker, quoted?, options?)
+await sock.sendSticker(remoteJid, sticker, quoted?, options?)
 ```
 
-Example:
+Payload:
 
 ```js
-await sock.sendSticker(
-  jid,
-  './media/sticker.webp',
-  quotedMessage
-)
+await sock.sendSticker('6281234567890@s.whatsapp.net', './sticker.png', quotedMsg, {
+    packname: 'Nexray Pack',
+    author: '@nexray',
+    categories: ['😀', '🔥'],
+    withExif: true,
+
+    // flag StickerMessage (semua opsional)
+    isAnimated: false,
+    stickerSentTs: Date.now(),
+    isAvatar: false,
+    isAiSticker: false,
+    isLottie: false,
+    premium: 1,
+    // extraFields: { ... }   // field StickerMessage lain apa pun
+})
 ```
 
-Sticker conversion is delegated to the configured Baileys/media implementation where available.
+Non-WebP input is converted automatically; EXIF metadata is embedded when
+`packname`/`author` are provided.
 
----
-
-## sendAlbum
-
-### Signature
+### sendStickerPack
 
 ```js
-await sock.sendAlbum(jid, items, quoted?, options?)
+await sock.sendStickerPack(remoteJid, pack, quoted?, options?)
 ```
 
-### Payload
+Payload:
 
 ```js
-await sock.sendAlbum(jid, [
-  {
-    image: './media/one.jpg',
-    caption: 'First image'
-  },
-  {
-    image: './media/two.jpg',
-    caption: 'Second image'
-  },
-  {
-    video: './media/video.mp4',
-    caption: 'Video'
-  }
-], quotedMessage)
+await sock.sendStickerPack('6281234567890@s.whatsapp.net', {
+    name: 'My Pack',
+    publisher: '@nexray',
+    description: 'Sticker pack description',
+    emojis: ['😀'],
+    cover: './cover.png',                       // required
+    stickers: [
+        { name: 'sticker 1', media: './s1.png', emojis: ['😀'], accessibilityLabel: 'satu' },
+        { name: 'sticker 2', media: './s2.png' }
+    ]
+}, quotedMsg)
 ```
 
-An album requires at least two media items.
+Max 60 stickers; each sticker under 1MB; converted to WebP automatically.
 
-Each item can contain:
+### sendAlbum
 
 ```js
-{
-  image: Buffer | string | { url: string },
-  caption: string
-}
+await sock.sendAlbum(remoteJid, items, quoted?, options?)
 ```
 
-or:
+Payload — array of `{ image }` / `{ video }` items (min 1), all relayed in
+parallel under one album bubble:
 
 ```js
-{
-  video: Buffer | string | { url: string },
-  caption: string
-}
+await sock.sendAlbum('6281234567890@s.whatsapp.net', [
+    { image: './photo1.jpg', caption: 'first' },
+    { video: './clip.mp4' },
+    { image: Buffer.from(...) }
+], quotedMsg, {
+    messageId: 'album-root-id'
+})
 ```
 
----
-
-# sendInteractive
-
-`sendInteractive` creates a native-flow interactive message.
-
-Aliases:
+### sendInteractive
 
 ```js
-sock.sendIAMessage
-sock.sendButton
+await sock.sendInteractive(remoteJid, payload, quoted?, options?)
+await sock.sendInteractive(remoteJid, buttons, quoted?, options?) // shortcuts
 ```
 
-all point to the same implementation.
-
-## Supported call forms
-
-### Form 1
+Payload — quoted message lewat parameter ke-3 (setelah `remoteJid`), tombol
+pakai **`interactiveButtons`**:
 
 ```js
-await sock.sendInteractive(
-  jid,
-  buttons,
-  quotedMessage,
-  options
-)
+await sock.sendInteractive('6281234567890@s.whatsapp.net', {
+    text: 'Pilih opsi di bawah',           // body text
+    footer: 'Nexray Interactive',
+    title: 'Interactive Header',           // header title (no media)
+    mentions: ['62811111111@s.whatsapp.net'],
+    contextInfo: { forwardingScore: 1 },
+    interactiveButtons: [                  // native flow buttons (bukan `buttons`)
+        {
+            name: 'quick_reply',
+            buttonParamsJson: JSON.stringify({ display_text: 'Option A', id: 'a' })
+        },
+        {
+            name: 'cta_url',
+            buttonParamsJson: JSON.stringify({
+                display_text: 'Visit site',
+                url: 'https://example.com',
+                merchant_url: 'https://example.com'
+            })
+        }
+    ],
+    messageParamsJson: { action: 'choose' } // or a JSON string
+}, quotedMsg)
 ```
 
-### Form 2
+Header media — `image`, `video`, atau `location` (thumbnail otomatis di-resize 300x300):
 
 ```js
-await sock.sendInteractive(
-  jid,
-  message,
-  options
-)
-```
+// image header
+await sock.sendInteractive('6281234567890@s.whatsapp.net', {
+    text: 'Image header',
+    footer: 'Nexray',
+    image: './database/assets/allmenu.jpg',  // atau video: './clip.mp4'
+    interactiveButtons: [
+        {
+            name: 'quick_reply',
+            buttonParamsJson: JSON.stringify({ display_text: 'Continue', id: 'continue' })
+        }
+    ]
+}, message)   // quoted di akhir — tidak di tengah payload
 
-where `message` is a Baileys message object and `options` contains the interactive payload.
-
-### Form 3
-
-```js
-await sock.sendInteractive(
-  jid,
-  {
-    text: 'Hello',
-    footer: 'Footer',
-    interactiveButtons: buttons
-  },
-  quotedMessage
-)
-```
-
----
-
-# sendInteractive Payload
-
-The `media.location` payload is intentionally preserved as a **location header**. The library does not convert `media.location.jpegThumbnail` into a standalone `imageMessage`.
-
-A location header may contain:
-
-```js
-media: {
-  location: {
-    degreesLatitude: 0,
-    degreesLongitude: 0,
-    name: 'Location title',
-    address: 'Optional address',
-    url: 'https://example.com',
-    jpegThumbnail: './database/assets/allmenu.jpg',
-    image: './media/header.jpg',
-    video: './media/header.mp4',
-    contextInfo: {
-      mentionedJid: ['628123456789@s.whatsapp.net']
-    }
-  }
-}
-```
-
-`jpegThumbnail` remains part of `locationMessage`. When `image` or `video` is supplied, the corresponding media is prepared without discarding the location payload. `contextInfo` can be supplied at the location level or at the interactive-message level.
-
-The following payload is supported directly:
-
-```js
-await sock.sendInteractive(remoteJid, message, {
-  text:
-    `Hello @${senderLid.split('@')[0]} 🫟,\n` +
-    `Your devices I am ${global.bot_name}, a bot assistant ready to help you. ` +
-    `To see all menus, send a message allmenu. I have been updated to version ${global.version}. ` +
-    `Don't forget to contact the owner for rental or donations.\n\n` +
-    `*Website* : ${global.API}\n` +
-    `*Library* : @elrayyxml/baileys`,
-  footer: global.footer,
-  mentions: [senderLid],
-  title: '© ' + global.bot_name + ' v' + global.version,
-  media: {
+// location header
+await sock.sendInteractive('6281234567890@s.whatsapp.net', {
+    text: 'Lokasi toko kami',
     location: {
-      degreesLatitude: 0,
-      degreesLongitude: 0,
-      name: '© ' + global.bot_name + ' v' + global.version,
-      jpegThumbnail: './database/assets/allmenu.jpg'
+        degreesLatitude: -6.2,
+        degreesLongitude: 106.8,
+        name: 'Jakarta',
+        jpegThumbnail: './thumb.jpg'        // opsional, di-resize 300x300
+    },
+    interactiveButtons: [
+        { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Rute', id: 'route' }) }
+    ]
+})
+```
+
+`interactiveButtons` sudah menjadi internal `nativeFlowMessage.buttons` —
+tidak perlu field `nativeFlow` terpisah.
+
+Commerce surfaces:
+
+```js
+await sock.sendInteractive('6281234567890@s.whatsapp.net', {
+    text: 'Katalog kami',
+    interactiveButtons: [{ name: 'quick_reply', buttonParamsJson: '{}' }],
+    bizJid: '6281234567890@s.whatsapp.net'  // or shopSurface: 'SHOP'
+})
+```
+
+Passing buttons directly (shortcut form):
+
+```js
+await sock.sendInteractive('6281234567890@s.whatsapp.net', [
+    { text: 'Option A', id: 'a' },
+    { text: 'Option B', id: 'b' }
+], quotedMsg, { footer: 'footer text' })
+```
+
+### sendContact
+
+```js
+await sock.sendContact(remoteJid, contact | contact[], quoted?, options?)
+```
+
+Payload — satu kontak, array kontak (digabung jadi satu vcard), atau raw vcard
+string; quoted lewat parameter ke-3:
+
+```js
+// array kontak — quoted di parameter ke-3
+await sock.sendContact('6281234567890@s.whatsapp.net', [
+    {
+        name: 'Lia Wynn',
+        org: '🛎️ Waitress',
+        email: 'my-email@gmail.com',
+        website: '',
+        location: 'Jakarta',
+        other: '❤️ Simplified WhatsApp API',
+        number: '6281111111111'
+    },
+    {
+        name: '❤️ My Big Brother',
+        org: '👥 Siblings',
+        email: 'his-email@gmail.com',
+        website: '...',
+        location: 'Jakarta',
+        other: '❤️ Simplified WhatsApp API',
+        number: '6281111111111'
     }
-  },
-  interactiveButtons: [
-    {
-      name: 'call_permission_request',
-      buttonParamsJson: JSON.stringify({
-        has_multiple_buttons: true
-      })
-    },
-    {
-      name: 'cta_url',
-      buttonParamsJson: JSON.stringify({
-        display_text: 'nexray api',
-        url: 'https://api.nexray.eu.cc',
-        merchant_url: 'https://api.nexray.eu.cc',
-        has_multiple_buttons: true
-      })
-    },
-    {
-      name: 'cta_url',
-      buttonParamsJson: JSON.stringify({
-        display_text: 'nexray cdn',
-        url: 'https://cdn.nexray.web.id',
-        merchant_url: 'https://cdn.nexray.web.id',
-        has_multiple_buttons: true
-      })
-    },
-    {
-      name: 'cta_url',
-      buttonParamsJson: JSON.stringify({
-        display_text: 'nexray code',
-        url: 'https://code.nexray.web.id',
-        merchant_url: 'https://code.nexray.web.id',
-        has_multiple_buttons: true
-      })
-    },
-    {
-      name: 'single_select',
-      buttonParamsJson: JSON.stringify({
-        title: 'Next Page',
-        sections: [
-          {
-            title: 'Main Menu',
-            rows: [
-              {
-                title: 'Download',
-                description: 'Media download commands',
-                id: '.menu download'
-              },
-              {
-                title: 'Tools',
-                description: 'Utility tools',
-                id: '.menu tools'
-              },
-              {
-                title: 'Owner',
-                description: 'Owner only commands',
-                id: '.menu owner'
-              },
-              {
-                title: 'Group',
-                description: 'Group management',
-                id: '.menu group'
-              },
-              {
-                title: 'Fun',
-                description: 'Fun & games',
-                id: '.menu fun'
-              }
+], message)
+
+// kontak tunggal (classic fields juga didukung)
+await sock.sendContact('6281234567890@s.whatsapp.net', {
+    name: 'Elrayy',
+    organization: '@nexray',
+    title: 'Developer',
+    phones: [{ type: 'WORK', number: '6281234567890' }],
+    email: 'elrayy@example.com',
+    url: 'https://example.com'
+})
+
+// kontak bisnis — X-WA-BIZ-NAME / X-WA-BIZ-DESCRIPTION
+await sock.sendContact('6281234567890@s.whatsapp.net', {
+    name: config.owner_name,
+    org: config.bot_name,
+    title: config.bot_name,
+    number,
+    email: config.owner_email,
+    website: config.owner_website,
+    location: config.region,
+    other: `Owner ${config.bot_name}`,
+    bizName: config.owner_name,
+    bizDescription: 'A beginner who has skill issues'
+})
+
+// raw vcard string
+const vcard = `BEGIN:VCARD
+VERSION:3.0
+N:Owner;;;; 
+FN:Owner
+ORG:${config.bot_name}
+TITLE:${config.bot_name}
+TEL;TYPE=WORK;waid=${number}:${number}
+EMAIL;type=INTERNET:${config.owner_email}
+URL:${config.owner_website}
+ADR;TYPE=WORK:;;${config.region};;;
+NOTE:Owner ${config.bot_name}
+X-WA-BIZ-NAME:${config.owner_name}
+X-WA-BIZ-DESCRIPTION:some description
+END:VCARD`
+await sock.sendContact('6281234567890@s.whatsapp.net', vcard, message)
+```
+
+### sendProduct
+
+```js
+await sock.sendProduct(remoteJid, product, quoted?, options?)
+```
+
+Payload — full interactive product message (`image` accepts Buffer, URL, or path; `interactiveButtons` supports any native flow button):
+
+```js
+await sock.sendProduct('6281234567890@s.whatsapp.net', {
+    // media — Buffer, URL, atau path
+    image: './product.jpg',
+    title: '© Nexray Bot v1.0.0',
+    productId: 'product-001',
+    currencyCode: 'IDR',
+    priceAmount1000: 150000,            // harga dalam 1000ths (150.000)
+    productImageCount: 1,
+    // firstImageUrl: 'https://files.catbox.moe/hykp52.jpg',
+    // salePriceAmount1000: 100000,
+    // retailerId: 'retailer-001',
+
+    // wajib — JID pemilik bisnis
+    businessOwnerJid: '6281234567890@s.whatsapp.net',
+
+    // teks
+    caption: 'Belanja sekarang!',
+    footer: 'Nexray Store',
+
+    // native flow buttons — support penuh
+    interactiveButtons: [
+        {
+            name: 'cta_url',
+            buttonParamsJson: JSON.stringify({
+                display_text: 'Download Now',
+                url: 'https://autoresbot.com/download'
+            })
+        },
+        {
+            name: 'cta_url',
+            buttonParamsJson: JSON.stringify({
+                display_text: 'Developer Channel',
+                url: 'https://whatsapp.com/channel/0029VaDSRuf05MUekJbazP1D'
+            })
+        },
+        {
+            name: 'cta_url',
+            buttonParamsJson: JSON.stringify({
+                display_text: 'My Channel',
+                url: 'https://whatsapp.com/channel/0000000000000000000000'
+            })
+        },
+        {
+            name: 'automated_greeting_message_view_catalog',
+            buttonParamsJson: JSON.stringify({
+                business_phone_number: '6281234567890',
+                catalog_product_id: 'product-001'
+            })
+        }
+    ],
+
+    hasMediaAttachment: true
+}, quotedMsg)
+```
+
+### sendLivePhoto
+
+```js
+await sock.sendLivePhoto(remoteJid, image, video, quoted?, options?)
+```
+
+Payload:
+
+```js
+await sock.sendLivePhoto('6281234567890@s.whatsapp.net', './photo.jpg', './live.mov', null, {
+    caption: 'Live photo'
+})
+```
+
+The image thumbnail is generated directly through the engine's
+`generateThumbnail`.
+
+### sendThumbnailPreview
+
+```js
+await sock.sendThumbnailPreview(remoteJid, text, opts?, message?)
+```
+
+Payload — text + link preview; `message` (optional) is the quoted message:
+
+```js
+// preview kecil (default) — thumbnail opsional
+await sock.sendThumbnailPreview('6281234567890@s.whatsapp.net', 'Cek link ini!', {
+    title: 'Nexray',
+    body: 'Deskripsi preview',
+    url: 'https://example.com',
+    thumbnail: './thumb.jpg'            // opsional — jadi jpegThumbnail
+}, quotedMsg)
+
+// preview besar — thumbnail wajib
+await sock.sendThumbnailPreview('6281234567890@s.whatsapp.net', 'Video baruku!', {
+    title: 'Reels Nexray',
+    body: 'Lihat video terbaru',
+    url: 'https://example.com/reels',
+    largeThumb: true,
+    ratio: 'landscape',                 // 'landscape' | 'portrait' | 'square'
+    thumbnail: './thumb.jpg',           // wajib untuk largeThumb: true
+    icon: './favicon.png',              // opsional — favicon
+    duration: 30,                       // linkMediaDuration (detik, untuk video/audio)
+    postType: 1                         // 0=NONE, 1=REEL, 2=LIVE_VIDEO, 3=LONG_VIDEO, 4=SINGLE_IMAGE, 5=CAROUSEL
+}, quotedMsg)
+```
+
+### sendCard
+
+```js
+await sock.sendCard(remoteJid, payload, quoted?, options?)
+```
+
+Payload — carousel cards with `image` **or** `video` per card:
+
+```js
+await sock.sendCard('6281234567890@s.whatsapp.net', {
+    text: 'Pilih produk:',
+    footer: 'Nexray Store',
+    cards: [
+        {
+            cardId: 'card-1',
+            title: 'Produk A',
+            subtitle: 'Rp 10.000',
+            image: './product-a.jpg',        // or video: './product-a.mp4'
+            buttons: [
+                { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Beli', id: 'buy-a' }) }
             ]
-          }
-        ],
-        has_multiple_buttons: true
-      })
-    }
-  ],
-  messageParamsJson: {
-    limited_time_offer: {
-      text: 'オートメーション',
-      url: 'https://api.nexray.eu.cc',
-      copy_code: 'elrayyxml',
-      expiration_time: 1771649813289000
-    },
-    bottom_sheet: {
-      in_thread_buttons_limit: 2,
-      divider_indices: [1, 2, 3, 4, 5, 999],
-      list_title: 'Select Menu',
-      button_title: 'Tap Here'
-    },
-    tap_target_configuration: {
-      title: 'elrayyxml',
-      description: 'WhatsApp Bot library based on Baileys',
-      canonical_url: 'https://instagram.com/elrayyxml',
-      domain: 'https://api.nexray.eu.cc',
-      button_index: 0
-    }
-  }
-})
-```
-
-### Important media behavior
-
-A native-flow interactive header accepts prepared media such as an image or video message.
-
-The payload above uses:
-
-```js
-media.location.jpegThumbnail
-```
-
-The library treats this thumbnail as the visual header image.
-
-It does not insert `locationMessage` into the interactive header because an interactive header is not a general-purpose location message container. Doing so can produce a message that is successfully relayed but has no visible media on the receiving client.
-
-The thumbnail is therefore converted through Baileys:
-
-```js
-prepareWAMessageMedia({
-  image: thumbnail
-}, {
-  upload: sock.waUploadToServer
-})
-```
-
-and attached as:
-
-```js
-header: {
-  title: '...',
-  hasMediaAttachment: true,
-  imageMessage: {
-    ...
-  }
-}
-```
-
-This is the important distinction between a media payload being present in the JavaScript object and the media being a valid renderable interactive header.
-
----
-
-# Interactive Buttons
-
-## quick_reply
-
-```js
-{
-  name: 'quick_reply',
-  buttonParamsJson: JSON.stringify({
-    display_text: 'OWNER',
-    id: '.owner'
-  })
-}
-```
-
-## cta_url
-
-```js
-{
-  name: 'cta_url',
-  buttonParamsJson: JSON.stringify({
-    display_text: 'Website',
-    url: 'https://example.com',
-    merchant_url: 'https://example.com'
-  })
-}
-```
-
-## cta_copy
-
-```js
-{
-  name: 'cta_copy',
-  buttonParamsJson: JSON.stringify({
-    display_text: 'Copy',
-    copy_code: 'NEXRAY'
-  })
-}
-```
-
-## cta_call
-
-```js
-{
-  name: 'cta_call',
-  buttonParamsJson: JSON.stringify({
-    display_text: 'Call',
-    phone_number: '628123456789'
-  })
-}
-```
-
-## single_select
-
-```js
-{
-  name: 'single_select',
-  buttonParamsJson: JSON.stringify({
-    title: 'Select Menu',
-    sections: [
-      {
-        title: 'Main Menu',
-        rows: [
-          {
-            title: 'Download',
-            description: 'Media download commands',
-            id: '.menu download'
-          },
-          {
-            title: 'Tools',
-            description: 'Utility commands',
-            id: '.menu tools'
-          }
-        ]
-      }
+        },
+        {
+            cardId: 'card-2',
+            title: 'Produk B',
+            subtitle: 'Rp 20.000',
+            image: './product-b.jpg',
+            buttons: [
+                { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Beli', id: 'buy-b' }) }
+            ]
+        }
     ]
-  })
-}
+}, quotedMsg)
 ```
 
-## send_location
+### sendPoll / sendQuiz
 
 ```js
-{
-  name: 'send_location',
-  buttonParamsJson: JSON.stringify({
-    display_text: 'Share Location'
-  })
-}
+await sock.sendPoll(remoteJid, name, values, options?, quoted?)
+await sock.sendQuiz(remoteJid, name, values, correctOption, quoted?, options?)
 ```
 
-## call_permission_request
+Payload:
 
 ```js
-{
-  name: 'call_permission_request',
-  buttonParamsJson: JSON.stringify({
-    has_multiple_buttons: true
-  })
-}
+await sock.sendPoll('6281234567890@s.whatsapp.net', 'Framework favorit?', ['Nexray', 'Lainnya'], {
+    selectableOptionsCount: 1
+})
+await sock.sendQuiz('6281234567890@s.whatsapp.net', '1 + 1 = ?', ['1', '2', '3'], 2)
 ```
 
-Unknown native-flow button names are not rewritten. Their `name` and JSON parameters are passed through.
+`correctOption` is 1-based (index of the correct answer in `values`).
 
----
-
-# messageParamsJson
-
-`messageParamsJson` can be supplied as an object:
+### sendPollResult
 
 ```js
-messageParamsJson: {
-  limited_time_offer: {
-    text: 'Promotion',
-    url: 'https://example.com',
-    copy_code: 'NEXRAY',
-    expiration_time: 1771649813289000
-  },
-  bottom_sheet: {
-    in_thread_buttons_limit: 2,
-    divider_indices: [1, 2, 3, 4, 5, 999],
-    list_title: 'Select Menu',
-    button_title: 'Tap Here'
-  }
-}
+await sock.sendPollResult(remoteJid, name, values, key, quoted?, options?)
 ```
 
-or as a JSON string:
+Payload:
 
 ```js
-messageParamsJson: JSON.stringify({
-  bottom_sheet: {
-    in_thread_buttons_limit: 2,
-    divider_indices: [1, 2, 3, 4, 5, 999],
-    list_title: 'Select Menu',
-    button_title: 'Tap Here'
-  }
+await sock.sendPollResult('6281234567890@s.whatsapp.net', 'Framework favorit?', ['Nexray', 'Lainnya'], pollMsg.key)
+```
+
+### sendGroupStatus
+
+```js
+await sock.sendGroupStatus(jid, text, options?)
+```
+
+Payload:
+
+```js
+await sock.sendGroupStatus('group@g.us', 'Pengumuman penting!', {
+    color: '#0EABF4',        // background
+    textColor: '#FFFFFF',
+    font: 0,
+    fontSize: 'small',
+    closeFriends: false
 })
 ```
 
-Invalid JSON produces:
-
-```text
-NexrayError
-code: INVALID_OPTIONS
-message: messageParamsJson must contain valid JSON.
-```
-
----
-
-# Interactive media
-
-## Image
+### sendStatusMentions
 
 ```js
-await sock.sendInteractive(jid, {
-  text: 'Image header',
-  footer: 'Nexray',
-  media: './media/header.jpg',
-  interactiveButtons: [
-    {
-      name: 'quick_reply',
-      buttonParamsJson: JSON.stringify({
-        display_text: 'Continue',
-        id: 'continue'
-      })
-    }
-  ]
+await sock.sendStatusMentions(text, jidList, options?)
+```
+
+Payload:
+
+```js
+await sock.sendStatusMentions('Mention status', ['62811111111@s.whatsapp.net', '62822222222@s.whatsapp.net'], {
+    jid: 'status@broadcast'
 })
 ```
 
-## Remote image
+### sendEvent
 
 ```js
-media: 'https://example.com/header.jpg'
+await sock.sendEvent(remoteJid, event, quoted?, options?)
 ```
 
-## Buffer
+Payload:
 
 ```js
-media: imageBuffer
+await sock.sendEvent('6281234567890@s.whatsapp.net', {
+    name: 'Community Meetup',
+    description: 'Monthly sync',
+    startDate: new Date(Date.now() + 86400000),   // or startTime
+    endDate: new Date(Date.now() + 90000000),     // or endTime
+    location: {
+        degreesLatitude: -6.2,
+        degreesLongitude: 106.8,
+        name: 'Jakarta'
+    },
+    call: 'audio',          // audio | video
+    isCancelled: false,
+    extraGuestsAllowed: true,
+    isScheduleCall: false,
+    joinLink: ''
+}, quotedMsg)
 ```
 
-## Video
+`startDate`/`endDate` are required and validated.
+
+### sendOrder / sendInVoice
 
 ```js
-await sock.sendInteractive(jid, {
-  text: 'Video header',
-  media: './media/header.mp4',
-  interactiveButtons: [
-    {
-      name: 'quick_reply',
-      buttonParamsJson: JSON.stringify({
-        display_text: 'Open',
-        id: 'open'
-      })
-    }
-  ]
+await sock.sendOrder(remoteJid, order, quoted?, options?)
+await sock.sendInVoice(remoteJid, invoice, quoted?, options?)
+```
+
+Payload:
+
+```js
+await sock.sendOrder('6281234567890@s.whatsapp.net', {
+    orderId: 'ORDER-001',
+    thumbnail: 'https://example.com/thumb.jpg',
+    itemCount: 2,
+    status: 'IN_PROGRESS',
+    surface: 'CATALOG',
+    message: 'Pesanan diproses',
+    orderTitle: 'Order 001',
+    sellerJid: '6281234567890@s.whatsapp.net',
+    token: 'token-value',
+    totalAmount1000: 50000,
+    totalCurrencyCode: 'IDR'
+})
+
+await sock.sendInVoice('6281234567890@s.whatsapp.net', {
+    invoiceId: 'INV-001',
+    invoiceUrl: 'https://example.com/invoice',
+    currencyCodeIso4217: 'IDR',
+    amount1000: 25000,
+    invoiceName: 'Invoice 001',
+    thumbnailUrl: 'https://example.com/thumb.jpg',
+    description: 'Invoice description'
 })
 ```
 
-The library automatically selects the video header when `options.video` is supplied.
-
----
-
-# sendCarousel
-
-### Signature
+### sendLocation
 
 ```js
-await sock.sendCarousel(jid, cards, quoted?, options?)
+await sock.sendLocation(remoteJid, location, quoted?, button?, options?)
 ```
 
-### Payload
+Payload — thumbnail otomatis di-resize 300x300; mention via `mentions`
+(eksplisit):
 
 ```js
-await sock.sendCarousel(jid, [
-  {
-    image: './media/one.jpg',
-    caption: 'Card One',
+// tanpa tombol — location message polos dengan mention
+await sock.sendLocation('6281234567890@s.whatsapp.net', {
+    degreesLatitude: -6.2,
+    degreesLongitude: 106.8,
+    name: 'Jakarta',
+    address: 'Monas',
+    jpegThumbnail: './thumb.jpg'        // Buffer, URL, atau path — di-resize 300x300
+}, quotedMsg, null, {
+    caption: 'Kita ketemu di sini',
+    mentions: ['62811111111@s.whatsapp.net'],
+    // contextInfo: { forwardingScore: 1 }
+})
+
+// dengan tombol — interactive native flow (body = caption || name)
+await sock.sendLocation('6281234567890@s.whatsapp.net', {
+    degreesLatitude: -6.2,
+    degreesLongitude: 106.8,
+    name: 'Jakarta',
+    address: 'Monas'
+}, quotedMsg, null, {
+    caption: 'Temui aku di sini',
+    footer: 'Nexray Maps',
     buttons: [
-      {
-        name: 'cta_url',
-        buttonParamsJson: JSON.stringify({
-          display_text: 'Open',
-          url: 'https://example.com'
-        })
-      }
+        {
+            name: 'quick_reply',
+            buttonParamsJson: JSON.stringify({ display_text: 'Lihat rute', id: 'route' })
+        },
+        {
+            name: 'cta_url',
+            buttonParamsJson: JSON.stringify({ display_text: 'Buka Maps', url: 'https://maps.example.com' })
+        }
     ]
-  },
-  {
-    image: './media/two.jpg',
-    caption: 'Card Two',
-    buttons: [
-      {
-        name: 'cta_url',
-        buttonParamsJson: JSON.stringify({
-          display_text: 'Open',
-          url: 'https://example.org'
-        })
-      }
-    ]
-  }
-], quotedMessage, {
-  content: 'Browse the cards',
-  footer: 'Nexray'
 })
-```
 
-Each card can contain:
-
-```js
-{
-  image: Buffer | string | { url: string },
-  media: Buffer | string | { url: string },
-  caption: string,
-  title: string,
-  buttons: []
-}
-```
-
----
-
-# sendMetaMsg
-
-`sendMetaMsg` sends a WhatsApp AI Rich Response payload.
-
-Alias:
-
-```js
-sock.sendAIRich
-```
-
-Both methods use the same implementation.
-
-### Signature
-
-```js
-await sock.sendMetaMsg(jid, content, quoted?, options?)
-```
-
----
-
-# AI Rich Payload Reference
-
-AI Rich Response is not a normal media message.
-
-The protocol defines `AIRichResponseMessage` as a container with:
-
-```text
-messageType
-submessages
-unifiedResponse
-contextInfo
-```
-
-The supported rich submessage types include text, inline images, grid images, tables, code, dynamic media and additional protocol-defined content types.
-
-Because the protocol expects rich media metadata rather than a normal `imageMessage` attachment, placing:
-
-```js
-imageMessage: ...
-```
-
-inside an arbitrary rich-response object does not make the image render.
-
-The library therefore uses the actual AI Rich image metadata structure for rich images.
-
----
-
-## Text
-
-```js
-await sock.sendMetaMsg(jid, [
-  {
-    text: 'Hello from Nexray'
-  }
-])
-```
-
-Generated submessage:
-
-```js
-{
-  messageType: 2,
-  messageText: 'Hello from Nexray',
-  inlineEntities: []
-}
-```
-
----
-
-## Code
-
-```js
-await sock.sendMetaMsg(jid, [
-  {
-    code: {
-      language: 'javascript',
-      code: 'console.log("Hello World")'
-    }
-  }
-])
-```
-
-Generated structure:
-
-```js
-{
-  messageType: 5,
-  codeMetadata: {
-    codeLanguage: 'javascript',
-    codeBlocks: [
-      {
-        highlightType: 0,
-        codeContent: 'console.log("Hello World")'
-      }
-    ]
-  }
-}
-```
-
----
-
-## Table
-
-```js
-await sock.sendMetaMsg(jid, [
-  {
-    table: {
-      title: 'Data',
-      headers: ['Name', 'Value'],
-      rows: [
-        ['A', '100'],
-        ['B', '200']
-      ]
-    }
-  }
-])
-```
-
-Generated structure:
-
-```js
-{
-  messageType: 4,
-  tableMetadata: {
-    title: 'Data',
-    rows: [
-      {
-        isHeading: true,
-        items: ['Name', 'Value']
-      },
-      {
-        isHeading: false,
-        items: ['A', '100']
-      },
-      {
-        isHeading: false,
-        items: ['B', '200']
-      }
-    ]
-  }
-}
-```
-
----
-
-# AI Rich Image
-
-Use an HTTP or HTTPS URL for an AI Rich image.
-
-```js
-await sock.sendMetaMsg(jid, [
-  {
-    image: 'https://example.com/image.jpg',
-    imageText: 'Example image',
-    tapLinkUrl: 'https://example.com'
-  }
-])
-```
-
-Generated structure:
-
-```js
-{
-  messageType: 3,
-  imageMetadata: {
-    imageURL: {
-      imagePreviewURL: 'https://example.com/image.jpg',
-      imageHighResURL: 'https://example.com/image.jpg',
-      sourceURL: 'https://example.com/image.jpg'
-    },
-    imageText: 'Example image',
-    tapLinkUrl: 'https://example.com'
-  }
-}
-```
-
-This is an AI Rich image metadata payload.
-
-It is different from:
-
-```js
-{
-  imageMessage: {
-    ...
-  }
-}
-```
-
-which belongs to a normal WhatsApp media message.
-
----
-
-# AI Rich Dynamic Media
-
-Dynamic media can be represented with:
-
-```js
-await sock.sendMetaMsg(jid, [
-  {
-    dynamic: {
-      type: 1,
-      version: 1,
-      url: 'https://example.com/image.gif',
-      loopCount: 0
-    }
-  }
-])
-```
-
-Structure:
-
-```js
-{
-  messageType: 6,
-  dynamicMetadata: {
-    type: 1,
-    version: 1,
-    url: 'https://example.com/image.gif',
-    loopCount: 0
-  }
-}
-```
-
-Dynamic media type values depend on the Baileys/WhatsApp protocol version.
-
----
-
-# AI Rich content object
-
-Instead of an array, the helper also accepts:
-
-```js
-await sock.sendMetaMsg(jid, {
-  headerText: 'Header',
-  contentText: 'Main content',
-  image: 'https://example.com/image.jpg',
-  code: {
-    language: 'javascript',
-    code: 'console.log(1)'
-  },
-  table: {
-    title: 'Data',
-    headers: ['A', 'B'],
-    rows: [
-      ['1', '2']
-    ]
-  },
-  footerText: 'Footer'
-})
-```
-
----
-
-# Why AI Rich media can appear invisible
-
-A normal Baileys media payload is generated using:
-
-```js
-prepareWAMessageMedia({
-  image: {
-    url: 'https://example.com/image.jpg'
-  }
-}, {
-  upload: sock.waUploadToServer
-})
-```
-
-The result contains an `imageMessage`.
-
-AI Rich Response does not use that structure for its inline-image submessage.
-
-AI Rich expects:
-
-```js
-{
-  messageType: 3,
-  imageMetadata: {
-    imageURL: {
-      imagePreviewURL: 'https://...',
-      imageHighResURL: 'https://...',
-      sourceURL: 'https://...'
-    }
-  }
-}
-```
-
-Therefore a raw AI Rich message can be accepted by the server while an incorrectly embedded media object is ignored by the receiving client.
-
-`@nexray/lib` now separates these two representations.
-
-For URL-based rich images, use:
-
-```js
-{
-  image: 'https://example.com/image.jpg'
-}
-```
-
-For a normal local or buffered media attachment, use a standard media helper such as:
-
-```js
-sendImage()
-```
-
-or an interactive media header.
-
----
-
-# sendAIRich
-
-`sendAIRich` is an alias:
-
-```js
-sock.sendAIRich === sock.sendMetaMsg
-```
-
-Example:
-
-```js
-await sock.sendAIRich(jid, [
-  {
-    text: 'AI response'
-  },
-  {
-    image: 'https://example.com/image.jpg',
-    imageText: 'Preview'
-  },
-  {
-    code: {
-      language: 'javascript',
-      code: 'const value = 42'
-    }
-  }
-])
-```
-
----
-
-# Rich Response Options
-
-```js
-{
-  botJid: '867051314767696@bot',
-  disclaimerText: 'AI generated response',
-  sources: [
-    {
-      title: 'Documentation',
-      url: 'https://example.com',
-      icon: 'https://example.com/icon.png'
-    }
-  ],
-  quoted: quotedMessage,
-  messageId: 'CUSTOM_ID',
-  additionalNodes: []
-}
-```
-
----
-
-# sendPoll
-
-Supported call styles include:
-
-```js
-await sock.sendPoll(
-  jid,
-  ['Yes', 'No'],
-  quotedMessage,
-  {
-    name: 'Do you like this library?',
-    selectableCount: 1
-  }
-)
-```
-
-and:
-
-```js
-await sock.sendPoll(
-  jid,
-  'Do you like this library?',
-  {
-    options: ['Yes', 'No'],
-    multiselect: false
-  },
-  quotedMessage
-)
-```
-
----
-
-# sendQuiz
-
-Newsletter quiz example:
-
-```js
-await sock.sendQuiz(
-  '1211111111111@newsletter',
-  [
-    '✨ Yes',
-    '💀 No'
-  ],
-  quotedMessage,
-  {
-    name: 'Quiz',
-    correctAnswer: '✨ Yes'
-  }
-)
-```
-
----
-
-# sendPollResult
-
-```js
-await sock.sendPollResult(
-  jid,
-  'Poll Result',
-  [
-    {
-      name: 'Option A',
-      voteCount: 133
-    },
-    {
-      name: 'Option B',
-      voteCount: 18
-    }
-  ],
-  quotedMessage
-)
-```
-
----
-
-# sendQuizResult
-
-```js
-await sock.sendQuizResult(
-  jid,
-  'Quiz Result',
-  [
-    {
-      name: 'Correct',
-      voteCount: 133
-    },
-    {
-      name: 'Wrong',
-      voteCount: 18
-    }
-  ],
-  quotedMessage
-)
-```
-
----
-
-# sendEvent
-
-```js
-await sock.sendEvent(jid, {
-  name: 'Community Meetup',
-  description: 'Monthly sync',
-  startDate: new Date(Date.now() + 86400000),
-  endDate: new Date(Date.now() + 90000000),
-  location: {
+// single button via parameter `button`
+await sock.sendLocation('6281234567890@s.whatsapp.net', {
     degreesLatitude: -6.2,
     degreesLongitude: 106.8,
     name: 'Jakarta'
-  },
-  call: 'audio',
-  isCancelled: false,
-  extraGuestsAllowed: true,
-  isScheduleCall: false
-}, quotedMessage)
-```
-
-`startDate` is required.
-
-Accepted date forms are:
-
-```js
-Date
-```
-
-ISO string:
-
-```js
-'2026-08-20T10:00:00.000Z'
-```
-
-or epoch milliseconds.
-
----
-
-# sendContact
-
-```js
-await sock.sendContact(jid, [
-  {
-    name: 'Owner',
-    number: '628123456789',
-    about: 'Creator'
-  }
-], quotedMessage, {
-  org: 'Nexray',
-  website: 'https://example.com',
-  email: 'owner@example.com'
+}, quotedMsg, {
+    name: 'quick_reply',
+    buttonParamsJson: JSON.stringify({ display_text: 'Lihat rute', id: 'route' })
 })
 ```
 
-Business contact:
+## Newsletter
 
-```js
-await sock.sendContact(jid, [
-  {
-    name: 'Owner',
-    number: '628123456789',
-    business: true,
-    bizName: 'Nexray Bot',
-    bizDescription: 'WhatsApp automation',
-    title: 'Owner',
-    region: 'Indonesia',
-    email: 'owner@example.com',
-    website: 'https://example.com'
-  }
-], quotedMessage)
-```
-
----
-
-# sendProduct
-
-```js
-await sock.sendProduct(jid, {
-  image: './media/product.jpg',
-  title: 'Nexray Product',
-  productId: 'SKU-001',
-  businessOwnerJid: '628123456789@s.whatsapp.net',
-  caption: 'Product description',
-  footer: 'Nexray',
-  price: 150000,
-  currencyCode: 'IDR',
-  interactiveButtons: [
-    {
-      name: 'cta_url',
-      buttonParamsJson: JSON.stringify({
-        display_text: 'Open Website',
-        url: 'https://example.com'
-      })
-    }
-  ]
-}, quotedMessage)
-```
-
----
-
-# sendLivePhoto
-
-```js
-await sock.sendLivePhoto(jid, {
-  video: './media/video.mp4'
-}, quotedMessage)
-```
-
-Optional still image:
-
-```js
-await sock.sendLivePhoto(jid, {
-  video: './media/video.mp4',
-  image: './media/cover.jpg'
-}, quotedMessage)
-```
-
-When an image is omitted, the helper delegates thumbnail extraction to the configured Baileys engine.
-
----
-
-# sendThumbnailPreview
-
-```js
-await sock.sendThumbnailPreview(
-  jid,
-  'Check this out',
-  {
-    title: 'Nexray',
-    body: 'Example preview',
-    url: 'https://example.com',
-    thumbnail: './media/thumb.jpg',
-    largeThumb: true,
-    ratio: 'landscape',
-    icon: './media/icon.png'
-  },
-  quotedMessage
-)
-```
-
----
-
-# copyNForward
-
-```js
-await sock.copyNForward(jid, message)
-```
-
-Force-forward:
-
-```js
-await sock.copyNForward(jid, message, true)
-```
-
----
-
-# Media Handling
-
-Baileys supports several media input forms.
-
-## Buffer
-
-```js
-{
-  image: imageBuffer
-}
-```
-
-## Local path
-
-```js
-{
-  image: './media/image.jpg'
-}
-```
-
-## Remote URL
-
-```js
-{
-  image: {
-    url: 'https://example.com/image.jpg'
-  }
-}
-```
-
-The helper normalizes string media into:
-
-```js
-{
-  url: media
-}
-```
-
-and delegates preparation to:
-
-```js
-prepareWAMessageMedia()
-```
-
-The upload function is:
-
-```js
-sock.waUploadToServer
-```
-
----
-
-# Quoted Messages
-
-Quoted messages can be supplied positionally:
-
-```js
-await sock.sendText(
-  jid,
-  'Reply',
-  message
-)
-```
-
-or through options:
-
-```js
-await sock.sendText(
-  jid,
-  'Reply',
-  {
-    quoted: message
-  }
-)
-```
-
-The helper builds the required quoted-message context before generating the outgoing message.
-
----
-
-# Mentions
-
-Example:
-
-```js
-await sock.sendInteractive(jid, {
-  text: `Hello @${sender.split('@')[0]}`,
-  mentions: [sender],
-  interactiveButtons: [
-    {
-      name: 'quick_reply',
-      buttonParamsJson: JSON.stringify({
-        display_text: 'Continue',
-        id: 'continue'
-      })
-    }
-  ]
-})
-```
-
-Supported aliases:
-
-```js
-mentions
-mentionedJid
-```
-
----
-
-# Newsletter Annotation
-
-Configure globally:
+Newsletter media annotation is centralized. Configure a default:
 
 ```js
 Client(sock, {
-  engines: [baileys],
-  newsletterAnnotation: {
-    newsletterJid: '1211111111111@newsletter',
-    newsletterName: '@nexray',
-    accessibilityText: '@nexray',
-    contentType: 1,
-    polygonVertices: [
-      {
-        x: 60.71664810180664,
-        y: -36.39784622192383
-      },
-      {
-        x: -16.710189819335938,
-        y: 49.263675689697266
-      },
-      {
-        x: -56.585853576660156,
-        y: 37.85963439941406
-      },
-      {
-        x: 20.840980529785156,
-        y: -47.80188751220703
-      }
-    ]
-  }
+    engines: [Baileys],
+    newsletterAnnotation: {
+        newsletterJid: 'channel@newsletter',
+        newsletterName: 'My Channel'
+    }
 })
 ```
 
-It can also be overridden per message through:
+The annotation (polygon vertices + newsletter info) is applied automatically to
+image/video relays toward `@newsletter` JIDs, or pass
+`options.newsletterAnnotation` per message to override.
+
+Newsletter follow:
 
 ```js
-{
-  newsletterAnnotation: {
-    ...
-  }
-}
-```
-
----
-
-# Utils
-
-Import:
-
-```js
-const { Utils } = require('@nexray/lib')
-```
-
-## Utils.extend
-
-```js
-Utils.extend({
-  formatRupiah(value) {
-    return 'Rp' + Number(value).toLocaleString('id-ID')
-  }
-})
-
-Utils.formatRupiah(50000)
-```
-
-Built-in methods are protected.
-
-To explicitly override one:
-
-```js
-Utils.extend({
-  formatBytes(value) {
-    return String(value)
-  }
-}, {
-  force: true
+Client(sock, {
+    engines: [Baileys],
+    newsletterFollow: ['channel@newsletter']
 })
 ```
 
----
+## NODES
 
-## Utility reference
+Shared protocol node shapes used by the helpers, exported for direct use:
 
 ```js
-Utils.getDevice(id)
-Utils.generateMessageID(prefix)
-Utils.generateMessageIDV2(userId)
-
-Utils.sleep(milliseconds)
-Utils.delay(milliseconds)
-
-Utils.formatBytes(bytes)
-Utils.getRandom(extension)
-Utils.pickRandom(array)
-
-Utils.isUrl(value)
-Utils.isURL(value)
-Utils.isUrlValid(value)
-Utils.isUrlInText(value)
-Utils.extractLink(text)
-
-Utils.toBuffer(input)
-Utils.getStream(input)
-Utils.getMimeType(input)
-Utils.getAudioWaveform(buffer)
-
-Utils.hasNonNullishProperty(object, key)
-
-Utils.size(input, thresholdMB)
-Utils.sharp(input)
-Utils.random(array)
-Utils.texted(format, text)
-Utils.example(prefix, command, args)
-Utils.jsonFormat(data)
+import { NODES } from '@nexray/lib'
 ```
 
----
+- `mixed` — interactive native flow (used by sendInteractive / sendCard / sendLocation buttons)
+- `payment_key_info`, `catalog_message`, `order_details` — commerce native flows
+- `poll_creation`, `quiz_creation` — poll meta nodes (used by sendPoll / sendQuiz)
+- `event_creation` — event meta node (used by sendEvent)
+- `bot_ai` — AI labels (used by `ai: true`)
 
-# Error Handling
-
-The package uses `NexrayError` for helper-level validation and engine errors.
-
-Example:
+## Utils
 
 ```js
+import { Utils } from '@nexray/lib'
+```
+
+- `sleep`, `delay`, `getRandom`, `pickRandom`, `random`, `size`, `formatBytes`
+- `sharp(input)` — resize 300x300 cover (Buffer / URL / path)
+- `isUrl`, `isURL`, `isUrlValid`, `isUrlInText`, `extractLink`
+- `getDevice(id)`, `generateMessageID()`, `generateMessageIDV2(userJid?)`
+- `toBuffer`, `getStream`, `getMimeType`
+- `hasNonNullishProperty`, `texted(font, text)`, `example(prefix, command, args)`, `jsonFormat(value)`
+- `extend({ ... })` — inject project-local utilities into the namespace (`Utils.extend`)
+
+```js
+import { Utils } from '@nexray/lib'
+
+Utils.size(Buffer.alloc(2048))                  // '2.00 KB'
+Utils.size(Buffer.alloc(2048), 1)               // true  (lebih besar dari 1 MB)
+Utils.texted('bold', 'halo')                    // '*halo*'
+Utils.example('.', 'menu')                      // '• *Example* : .menu '
+Utils.jsonFormat({ a: 1, self: null })          // JSON 2-space, aman circular
+const thumb = await Utils.sharp('./foto.jpg')   // Buffer 300x300
+
+// inject utility lokal ke namespace
+Utils.extend({ greeting: () => 'halo' })
+```
+
+## Error Handling
+
+Every error is a `NexrayError` with a stable `code`:
+
+`INVALID_ENGINE`, `INVALID_OPTIONS`, `INVALID_SOCKET`, `INVALID_JID`,
+`INVALID_MEDIA`, `INVALID_MESSAGE`, `INVALID_DATE`, `NEWSLETTER_ONLY`,
+`MEDIA_DOWNLOAD`, `MEDIA_PROCESS`, `RELAY_FAILED`, `NOT_IMPLEMENTED`,
+`MISSING_ARGUMENT`.
+
+```js
+import { ErrorCodes } from '@nexray/lib'
 try {
-  await sock.sendInteractive(jid, {
-    text: 'Hello',
-    interactiveButtons: []
-  })
+    await sock.sendText('', 'x')
 } catch (error) {
-  console.error(error.name)
-  console.error(error.code)
-  console.error(error.message)
+    if (error.code === ErrorCodes.INVALID_JID) { /* ... */ }
 }
 ```
 
-Example result:
+## Project Structure
 
-```text
-NexrayError
-INVALID_OPTIONS
-Interactive button parameters are invalid.
+```
+lib/
+├── index.js        # ESM entry (main)
+├── index.mjs       # dual entry (node:module, import & require)
+├── core/
+│   ├── client.js    # socket wrapping + config validation
+│   ├── message.js  # relay pipeline + message helpers
+│   ├── serialize.js
+│   ├── node.js     # NODES protocol shapes
+│   └── index.js
+├── constant/
+│   ├── error.js
+│   └── index.js
+├── types/
+│   ├── baileys.js
+│   ├── utils.js
+│   └── index.js
+└── utils/
+    ├── exif.js
+    ├── sticker-pack.js
+    ├── logs.js
+    ├── cryptokey.js
+    ├── converter.js
+    ├── chiper.js
+    ├── function.js
+    └── index.js
 ```
 
-Errors intentionally use short, professional messages.
-
-The message describes the failed validation or missing capability directly.
-
----
-
-# Error Codes
-
-| Code | Meaning |
-|---|---|
-| `ENGINE` | The configured Baileys engine is missing or does not expose a required primitive. |
-| `INVALID_SOCKET` | The supplied socket is not a valid object. |
-| `INVALID_JID` | A destination JID is required but was not provided. |
-| `INVALID_OPTIONS` | The supplied options or payload are invalid. |
-| `INVALID_MEDIA` | The supplied media input is empty or incompatible with the requested helper. |
-| `MEDIA_DOWNLOAD` | A media download operation failed. |
-| `MEDIA_PROCESS` | Media processing failed. |
-| `RELAY_FAILED` | Message relay failed. |
-| `NOT_IMPLEMENTED` | The configured Baileys engine does not expose the required feature. |
-
----
-
-# Common Error Examples
-
-## Missing engine
-
-```text
-NexrayError
-ENGINE
-No Baileys engine is configured.
-```
-
-Fix:
-
-```js
-const baileys = require('baileys')
-
-Client(sock, {
-  engines: [baileys]
-})
-```
-
-## Missing JID
-
-```text
-NexrayError
-INVALID_JID
-sendInteractive requires a destination JID.
-```
-
-## Invalid button
-
-```text
-NexrayError
-INVALID_OPTIONS
-Interactive button 1 requires a name.
-```
-
-## Invalid JSON
-
-```text
-NexrayError
-INVALID_OPTIONS
-messageParamsJson must contain valid JSON.
-```
-
-## Missing media
-
-```text
-NexrayError
-INVALID_MEDIA
-prepareMedia: media input is empty
-```
-
----
-
-# Project Structure
-
-```text
-@nexray/
-├── package.json
-├── README.md
-├── LICENSE
-└── lib/
-    ├── index.js
-    ├── index.mjs
-    │
-    ├── constant/
-    │   ├── index.js
-    │   └── errors.js
-    │
-    ├── core/
-    │   ├── index.js
-    │   ├── client.js
-    │   └── engine.js
-    │
-    ├── helpers/
-    │   ├── index.js
-    │   ├── context.js
-    │   ├── generic.js
-    │   ├── message.js
-    │   ├── nodes.js
-    │   ├── rich-message.js
-    │   └── sticker.js
-    │
-    └── utils/
-        ├── index.js
-        ├── functions.js
-        ├── media.js
-        └── utils.js
-```
-
----
-
-# Internal Responsibilities
-
-## `core/client.js`
-
-Initializes the socket integration and registers the Baileys engine.
-
-## `core/engine.js`
-
-Resolves the configured Baileys engine and validates required primitives.
-
-## `helpers/message.js`
-
-Contains standard message helpers, media preparation, interactive messages, albums, polls, events and related send operations.
-
-## `helpers/rich-message.js`
-
-Builds AI Rich Response payloads and exposes:
-
-```js
-sendMetaMsg()
-sendAIRich()
-```
-
-## `helpers/context.js`
-
-Builds quoted-message and context metadata.
-
-## `helpers/nodes.js`
-
-Contains additional binary relay nodes required by specific message families.
-
-## `utils/functions.js`
-
-Contains small local utility functions and the explicit Baileys engine registry.
-
-## `utils/media.js`
-
-Provides thin wrappers around Baileys media primitives.
-
----
-
-# Compatibility
-
-The helper layer is intentionally dependent on the capabilities exposed by the configured Baileys engine.
-
-A feature can only work when the selected engine provides the corresponding primitive and protocol support.
-
-For example:
-
-```js
-prepareWAMessageMedia
-```
-
-is required for media-bearing interactive headers.
-
-Likewise:
-
-```js
-generateWAMessageFromContent
-```
-
-is required for raw interactive message generation.
-
-The library does not silently substitute incompatible implementations.
-
----
-
-# Development
-
-Clone the project:
+## Development
 
 ```bash
-git clone <repository-url>
-cd @nexray
+npm run check   # syntax check core files
+npm test        # run the test suite
 ```
 
-Install dependencies:
+## License
 
-```bash
-npm install
-```
-
-Syntax validation:
-
-```bash
-node --check lib/index.js
-node --check lib/helpers/message.js
-node --check lib/helpers/rich-message.js
-```
-
-A compatible Baileys package must be installed by the application or development environment when running integration tests.
-
----
-
-# Recommended Integration Test
-
-Use a real Baileys socket and test the following message families separately:
-
-1. Text
-2. Image
-3. Video
-4. Interactive without media
-5. Interactive with image media
-6. Interactive with location thumbnail
-7. Interactive with `single_select`
-8. Interactive with `cta_url`
-9. Interactive with `messageParamsJson`
-10. AI Rich text
-11. AI Rich code
-12. AI Rich table
-13. AI Rich URL image
-14. Poll
-15. Album
-
-For interactive media testing, inspect the generated payload before relay:
-
-```js
-const generated = await sock.sendInteractive(...)
-console.dir(generated.message, {
-  depth: null
-})
-```
-
-The interactive header should contain:
-
-```js
-interactiveMessage: {
-  header: {
-    hasMediaAttachment: true,
-    imageMessage: {
-      ...
-    }
-  }
-}
-```
-
-when an image header is supplied.
-
----
-
-# Changelog
-
-## 0.1.1
-
-### Interactive media rendering
-
-Fixed interactive headers that received:
-
-```js
-media: {
-  location: {
-    jpegThumbnail: './path/to/image.jpg'
-  }
-}
-```
-
-The thumbnail is now prepared as an `imageMessage` and attached to the interactive header.
-
-The previous implementation inserted the location payload as `locationMessage` inside the interactive header. That structure is not a valid renderable media representation for native-flow headers, so the message could be relayed successfully while the visual media remained invisible.
-
-### Interactive payload normalization
-
-Improved support for:
-
-```js
-interactiveButtons
-```
-
-```js
-messageParamsJson
-```
-
-```js
-mentions
-```
-
-```js
-quoted
-```
-
-and the call form:
-
-```js
-sendInteractive(jid, message, options)
-```
-
-JSON options are validated before relay.
-
-### AI Rich Response
-
-Improved AI Rich payload generation.
-
-Added explicit support for:
-
-```text
-Text
-Code
-Table
-Inline Image
-Dynamic Media
-```
-
-AI Rich image payloads now use the protocol's image metadata representation instead of placing normal `imageMessage` data inside the rich-response container.
-
-### Engine registration
-
-`Client()` now registers the configured Baileys engine with the utility layer, allowing:
-
-```js
-Utils.getDevice()
-Utils.getStream()
-Utils.toBuffer()
-Utils.getAudioWaveform()
-```
-
-to resolve the same engine configured for the socket.
-
-### Error handling
-
-Expanded the error-code registry and standardized validation errors.
-
----
-
-# Protocol Notes
-
-AI Rich Response and native-flow interactive messages are protocol-level WhatsApp message types.
-
-They are not interchangeable with ordinary:
-
-```js
-text
-image
-video
-document
-```
-
-payloads.
-
-A payload being accepted by `relayMessage()` only proves that the stanza was submitted. It does not guarantee that every field is recognized as a renderable field by the receiving WhatsApp client.
-
-For this reason, the helper deliberately distinguishes:
-
-```text
-Normal media message
-Interactive media header
-AI Rich image metadata
-```
-
-and builds each representation separately.
-
----
-
-# License
-
-ISC.
+ISC

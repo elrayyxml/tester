@@ -1,20 +1,25 @@
 {
   "name": "@nexray/lib",
   "version": "0.1.0",
-  "description": "Lightweight Baileys send helpers.",
+  "description": "Simplicity WhatsApp Baileys Engine & Helper Library - clean, modular, engine-injected message helpers on top of Baileys.",
+  "type": "module",
   "main": "./lib/index.js",
-  "module": "./lib/index.mjs",
-  "files": [
-    "lib/*",
-    "README.md"
-  ],
+  "module": "./lib/index.js",
+  "types": "./types/index.d.ts",
   "exports": {
     ".": {
-      "import": "./lib/index.mjs",
-      "require": "./lib/index.js",
+      "import": "./lib/index.js",
+      "require": "./lib/index.mjs",
       "default": "./lib/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
+  "files": [
+    "lib",
+    "types",
+    "README.md",
+    "LICENSE"
+  ],
   "keywords": [
     "whatsapp-bot",
     "whatsapp-api",
@@ -27,13 +32,21 @@
   "author": "@nexray - ElrayyXml",
   "license": "ISC",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19"
   },
   "dependencies": {
-    "mime-types": "^2.1.35",
     "audio-decode": "^2.2.3",
-    "sharp": "^0.34.5",
     "jszip": "^3.10.1",
-    "node-webpmux": "^3.1.7"
+    "mime-types": "^2.1.35",
+    "node-webpmux": "^3.1.7",
+    "sharp": "^0.34.5"
+  },
+  "peerDependencies": {
+    "baileys": "*"
+  },
+  "peerDependenciesMeta": {
+    "baileys": {
+      "optional": true
+    }
   }
 }
