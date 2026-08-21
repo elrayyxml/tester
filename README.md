@@ -75,7 +75,7 @@ const { Client, Utils } = require('@nexray/lib')
 | --- | --- | --- | --- |
 | `engines` | `Array` | Yes | Engines used by the library. The first entry is the primary engine. |
 | `bot` | `Function \| boolean \| null` | No | Detector for bot-generated message IDs. |
-| `custom_id` | `string \| null` | No | Prefix for local message ID helpers. |
+| `custom_id` | `string \| null` | No | Custom prefix injected into the hex message ID (whatsmeow-style). |
 | `stealth` | `string \| null` | No | Message ID device format: `ios`, `android`, `web`, `desktop`. |
 | `newsletterAnnotation` | `object \| null` | No | Default newsletter media annotation. |
 | `newsletterFollow` | `string \| string[] \| null` | No | Newsletter JIDs to follow on init. |
@@ -86,7 +86,7 @@ const { Client, Utils } = require('@nexray/lib')
 ```js
 bot: (id) => {
     return (
-        (id.startsWith('3EB0') && id.length === 40) ||
+        (id.startsWith('3EB0') && id.length === 22) ||
         id.startsWith('BAE') ||
         /[-]/.test(id)
     )
@@ -107,7 +107,15 @@ Detection is safe against `undefined`, `null`, non-string IDs, and malformed key
 - `desktop` → `3F` + 18 random chars
 
 Message ID priority: explicit `options.messageId` → `custom_id` prefix →
-stealth format → default `3EB0` + 36 hex.
+stealth format → default `3EB0` + 18 hex.
+
+### Custom message IDs
+
+`custom_id` (e.g. `Client(sock, { custom_id: 'STARFALL' })`) injects the
+prefix (uppercased) into a whatsmeow-style hex ID at a pseudo-random
+position derived from the ID hash — the same scheme as the fork's
+`generateMessageIDV2` (`'3EB0' + hex` with the prefix spliced in, e.g.
+`3EB0F1A2STARFALL9C4B7E8D5A6`):
 
 ## Engine Architecture
 
@@ -159,7 +167,7 @@ Payload:
 ```js
 await sock.sendText('6281234567890@s.whatsapp.net', 'halo dunia', quotedMsg, {
     ai: false,                       // label as AI generated (private chats only)
-    mentionsAll: false,              // set contextInfo.nonJidMentions = 1
+    mentionAll: false,               // set contextInfo.nonJidMentions = 1
     mentions: ['62811111111@s.whatsapp.net'],
     mentionedJid: ['62811111111@s.whatsapp.net'], // alias of mentions
     contextInfo: { forwardingScore: 1 },
@@ -172,9 +180,10 @@ await sock.sendText('6281234567890@s.whatsapp.net', 'halo dunia', quotedMsg, {
 ```
 
 Mentions accept both `mentions: []` and `mentionedJid: []` (aliases).
-`mentionsAll: true` sets `contextInfo.nonJidMentions = 1` (mention-all without a
-JID list) instead of resolving group participants. Combine with `mentions` to
-mention specific JIDs alongside the mention-all flag.
+`mentionAll: true` sets `contextInfo.nonJidMentions = 1` (mention-all without a
+JID list) instead of resolving group participants (legacy `mentionsAll` alias
+still works). Combine with `mentions` to mention specific JIDs alongside the
+mention-all flag.
 
 ### reply
 
@@ -284,7 +293,6 @@ await sock.sendSticker('6281234567890@s.whatsapp.net', './sticker.png', quotedMs
     packname: 'Nexray Pack',
     author: '@nexray',
     categories: ['😀', '🔥'],
-    withExif: true,
 
     // flag StickerMessage (semua opsional)
     isAnimated: false,
@@ -297,32 +305,38 @@ await sock.sendSticker('6281234567890@s.whatsapp.net', './sticker.png', quotedMs
 })
 ```
 
-Non-WebP input is converted automatically; EXIF metadata is embedded when
-`packname`/`author` are provided.
+Non-WebP input is converted automatically. EXIF metadata is **always**
+embedded (`sticker-pack-name`, `sticker-pack-publisher`, `emojis`, and the
+`premium` / `is-avatar-sticker` / `is-ai-sticker` / `is-lottie-sticker`
+flags). When `premium`/`isAvatar`/`isAiSticker` is set, the message also
+carries `messageContextInfo.limitSharingV2`.
 
 ### sendStickerPack
 
 ```js
-await sock.sendStickerPack(remoteJid, pack, quoted?, options?)
+await sock.sendStickerPack(remoteJid, stickers, quoted?, options?)
 ```
 
-Payload:
+Payload — `stickers` is an array of media (Buffer, path, URL, or
+`{ media, name, emojis, accessibilityLabel }` items); pack fields go in
+options:
 
 ```js
-await sock.sendStickerPack('6281234567890@s.whatsapp.net', {
+await sock.sendStickerPack('6281234567890@s.whatsapp.net', [
+    './s1.png',
+    { name: 'sticker 2', media: './s2.png', emojis: ['😀'], accessibilityLabel: 'dua' }
+], quotedMsg, {
     name: 'My Pack',
     publisher: '@nexray',
-    description: 'Sticker pack description',
+    caption: 'Sticker pack description',
     emojis: ['😀'],
-    cover: './cover.png',                       // required
-    stickers: [
-        { name: 'sticker 1', media: './s1.png', emojis: ['😀'], accessibilityLabel: 'satu' },
-        { name: 'sticker 2', media: './s2.png' }
-    ]
-}, quotedMsg)
+    cover: './cover.png'                       // required
+})
 ```
 
-Max 60 stickers; each sticker under 1MB; converted to WebP automatically.
+The legacy `{ stickers, cover, name, publisher, description }` payload
+object is still accepted. Max 60 stickers; each sticker under 1MB;
+converted to WebP automatically.
 
 ### sendAlbum
 
@@ -473,18 +487,18 @@ await sock.sendContact('6281234567890@s.whatsapp.net', {
     url: 'https://example.com'
 })
 
-// kontak bisnis — X-WA-BIZ-NAME / X-WA-BIZ-DESCRIPTION
+// kontak bisnis — title/description shorthand → X-WA-BIZ-NAME / X-WA-BIZ-DESCRIPTION
 await sock.sendContact('6281234567890@s.whatsapp.net', {
     name: config.owner_name,
     org: config.bot_name,
-    title: config.bot_name,
+    title: config.owner_name,
+    description: 'A beginner who has skill issues',
     number,
     email: config.owner_email,
     website: config.owner_website,
     location: config.region,
-    other: `Owner ${config.bot_name}`,
-    bizName: config.owner_name,
-    bizDescription: 'A beginner who has skill issues'
+    other: `Owner ${config.bot_name}`
+    // bizName/bizDescription also still work as aliases
 })
 
 // raw vcard string
@@ -511,7 +525,9 @@ await sock.sendContact('6281234567890@s.whatsapp.net', vcard, message)
 await sock.sendProduct(remoteJid, product, quoted?, options?)
 ```
 
-Payload — full interactive product message (`image` accepts Buffer, URL, or path; `interactiveButtons` supports any native flow button):
+Payload — full `productMessage` (`image` accepts Buffer, URL, path, or an
+already-prepared imageMessage; `interactiveButtons` supports any native
+flow button; `price` in rupiah is converted to `priceAmount1000`):
 
 ```js
 await sock.sendProduct('6281234567890@s.whatsapp.net', {
@@ -520,7 +536,8 @@ await sock.sendProduct('6281234567890@s.whatsapp.net', {
     title: '© Nexray Bot v1.0.0',
     productId: 'product-001',
     currencyCode: 'IDR',
-    priceAmount1000: 150000,            // harga dalam 1000ths (150.000)
+    price: 150000,                  // rupiah → priceAmount1000 (150000000)
+    // priceAmount1000: 150000,     // atau langsung dalam 1000ths (prioritas)
     productImageCount: 1,
     // firstImageUrl: 'https://files.catbox.moe/hykp52.jpg',
     // salePriceAmount1000: 100000,
@@ -572,19 +589,23 @@ await sock.sendProduct('6281234567890@s.whatsapp.net', {
 ### sendLivePhoto
 
 ```js
-await sock.sendLivePhoto(remoteJid, image, video, quoted?, options?)
+await sock.sendLivePhoto(remoteJid, { video, image? }, quoted?, options?)
+// legacy: await sock.sendLivePhoto(remoteJid, image, video, quoted?, options?)
 ```
 
-Payload:
+Payload — the image message is relayed first (`pairedMediaType: 5`), then
+the video message follows with `pairedMediaType: 6` and a
+`messageAssociation` (type 12) pointing at the image message key. The image
+is optional — it falls back to the video thumbnail:
 
 ```js
-await sock.sendLivePhoto('6281234567890@s.whatsapp.net', './photo.jpg', './live.mov', null, {
+await sock.sendLivePhoto('6281234567890@s.whatsapp.net', {
+    video: './live.mov',
+    image: './photo.jpg'        // optional — falls back to video thumbnail
+}, quotedMsg, {
     caption: 'Live photo'
 })
 ```
-
-The image thumbnail is generated directly through the engine's
-`generateThumbnail`.
 
 ### sendThumbnailPreview
 
@@ -623,7 +644,9 @@ await sock.sendThumbnailPreview('6281234567890@s.whatsapp.net', 'Video baruku!',
 await sock.sendCard(remoteJid, payload, quoted?, options?)
 ```
 
-Payload — carousel cards with `image` **or** `video` per card:
+Payload — carousel cards with `image` **or** `video` per card (media is
+required per card). Each card is built as `nativeFlowMessage` +
+`header` + `body`:
 
 ```js
 await sock.sendCard('6281234567890@s.whatsapp.net', {
@@ -631,16 +654,16 @@ await sock.sendCard('6281234567890@s.whatsapp.net', {
     footer: 'Nexray Store',
     cards: [
         {
-            cardId: 'card-1',
             title: 'Produk A',
             subtitle: 'Rp 10.000',
             image: './product-a.jpg',        // or video: './product-a.mp4'
+            caption: 'Deskripsi singkat',    // body text per card
+            footer: 'Footer A',              // optional
             buttons: [
-                { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Beli', id: 'buy-a' }) }
+                { name: 'quick_reply', buttonParamsJson: { display_text: 'Beli', id: 'buy-a' } }
             ]
         },
         {
-            cardId: 'card-2',
             title: 'Produk B',
             subtitle: 'Rp 20.000',
             image: './product-b.jpg',
@@ -652,23 +675,44 @@ await sock.sendCard('6281234567890@s.whatsapp.net', {
 }, quotedMsg)
 ```
 
+`buttonParamsJson` accepts an object (JSON-stringified automatically) or a
+string. Produces `interactiveMessage.carouselMessage` with
+`carouselCardType: 0` and `messageVersion: 1`.
+
 ### sendPoll / sendQuiz
 
 ```js
-await sock.sendPoll(remoteJid, name, values, options?, quoted?)
+// form baru
+await sock.sendPoll(remoteJid, values, quoted?, options?)
+await sock.sendQuiz(remoteJid, values, quoted?, options?)      // newsletter JID only
+// legacy
+await sock.sendPoll(remoteJid, name, values, options?, quotedOrOptions?)
 await sock.sendQuiz(remoteJid, name, values, correctOption, quoted?, options?)
 ```
 
-Payload:
+Payload — `selectableCount: 1` sends `pollCreationMessageV3`,
+`toAnnouncementGroup` sends `pollCreationMessageV2`, otherwise
+`pollCreationMessage`; quizzes send `pollCreationMessageV5` with
+`pollType: 1` + `correctAnswer`:
 
 ```js
-await sock.sendPoll('6281234567890@s.whatsapp.net', 'Framework favorit?', ['Nexray', 'Lainnya'], {
-    selectableOptionsCount: 1
+await sock.sendPoll('6281234567890@s.whatsapp.net', ['✨ Yes', '💀 No'], quotedMsg, {
+    name: '🔥 Is it good?',
+    selectableCount: 1,
+    endDate: new Date(Date.now() + 86400000),
+    hideVoter: false,
+    canAddOption: false,
+    toAnnouncementGroup: false
 })
-await sock.sendQuiz('6281234567890@s.whatsapp.net', '1 + 1 = ?', ['1', '2', '3'], 2)
+
+// quiz — newsletter JID wajib
+await sock.sendQuiz('1211111111111@newsletter', ['✨ Yes', '💀 No'], quotedMsg, {
+    name: '🔥 Quiz!',
+    correctAnswer: '✨ Yes'
+})
 ```
 
-`correctOption` is 1-based (index of the correct answer in `values`).
+Legacy `correctOption` is 1-based (index of the correct answer in `values`).
 
 ### sendPollResult
 
@@ -727,21 +771,22 @@ await sock.sendEvent('6281234567890@s.whatsapp.net', {
     name: 'Community Meetup',
     description: 'Monthly sync',
     startDate: new Date(Date.now() + 86400000),   // or startTime
-    endDate: new Date(Date.now() + 90000000),     // or endTime
+    endDate: new Date(Date.now() + 90000000),     // or endTime (optional)
     location: {
         degreesLatitude: -6.2,
         degreesLongitude: 106.8,
         name: 'Jakarta'
     },
-    call: 'audio',          // audio | video
-    isCancelled: false,
+    call: { isVideo: false },   // resolved via the engine's getCallLink → joinLink
+    isCancelled: false,         // proto field `isCanceled`
     extraGuestsAllowed: true,
     isScheduleCall: false,
-    joinLink: ''
+    // joinLink: ''             // optional — overrides the call-resolved link
 }, quotedMsg)
 ```
 
-`startDate`/`endDate` are required and validated.
+`startDate` is required and validated; `endDate` is optional. The payload
+always carries `messageContextInfo.messageSecret` and `isCanceled`.
 
 ### sendOrder / sendInVoice
 
@@ -774,9 +819,16 @@ await sock.sendInVoice('6281234567890@s.whatsapp.net', {
     amount1000: 25000,
     invoiceName: 'Invoice 001',
     thumbnailUrl: 'https://example.com/thumb.jpg',
-    description: 'Invoice description'
+    description: 'Invoice description',
+    image: './thumb.jpg'    // optional — prepared as the encrypted attachment
 })
 ```
+
+When `image`/`thumbnail` is provided, the attachment fields
+(`attachmentType`, `attachmentMimetype`, `attachmentMediaKey`,
+`attachmentDirectPath`, `attachmentFileSha256`, `attachmentFileEncSha256`,
+`attachmentJpegThumbnail`) are embedded in `invoiceMessage`, and a
+`token` is always generated.
 
 ### sendLocation
 
@@ -801,7 +853,7 @@ await sock.sendLocation('6281234567890@s.whatsapp.net', {
     // contextInfo: { forwardingScore: 1 }
 })
 
-// dengan tombol — interactive native flow (body = caption || name)
+// dengan tombol — buttonsMessage (headerType 5 + locationMessage)
 await sock.sendLocation('6281234567890@s.whatsapp.net', {
     degreesLatitude: -6.2,
     degreesLongitude: 106.8,
@@ -811,14 +863,8 @@ await sock.sendLocation('6281234567890@s.whatsapp.net', {
     caption: 'Temui aku di sini',
     footer: 'Nexray Maps',
     buttons: [
-        {
-            name: 'quick_reply',
-            buttonParamsJson: JSON.stringify({ display_text: 'Lihat rute', id: 'route' })
-        },
-        {
-            name: 'cta_url',
-            buttonParamsJson: JSON.stringify({ display_text: 'Buka Maps', url: 'https://maps.example.com' })
-        }
+        { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Lihat rute', id: 'route' }) },
+        { text: 'Buka Maps', id: 'maps' }   // plain buttons are normalized to { buttonId, buttonText, type: 1 }
     ]
 })
 
