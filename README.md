@@ -314,29 +314,28 @@ carries `messageContextInfo.limitSharingV2`.
 ### sendStickerPack
 
 ```js
-await sock.sendStickerPack(remoteJid, stickers, quoted?, options?)
+await sock.sendStickerPack(remoteJid, payload, quoted?)
 ```
 
-Payload — `stickers` is an array of media (Buffer, path, URL, or
-`{ media, name, emojis, accessibilityLabel }` items); pack fields go in
-options:
+Payload — pack fields + stickers array (each sticker: buffer/path/url or
+`{ sticker, emojis, accessibilityLabel }`):
 
 ```js
-await sock.sendStickerPack('6281234567890@s.whatsapp.net', [
-    './s1.png',
-    { name: 'sticker 2', media: './s2.png', emojis: ['😀'], accessibilityLabel: 'dua' }
-], quotedMsg, {
+await sock.sendStickerPack('6281234567890@s.whatsapp.net', {
     name: 'My Pack',
     publisher: '@nexray',
-    caption: 'Sticker pack description',
+    description: 'Sticker pack description',
     emojis: ['😀'],
-    cover: './cover.png'                       // required
-})
+    cover: './cover.png',                       // required buffer/path/url
+    stickers: [
+        { sticker: './s1.png', emojis: ['😀'], accessibilityLabel: 'satu' },
+        { sticker: 'https://example.com/s2.webp' },
+        './s3.png'                              // shorthand — just media
+    ]
+}, quotedMsg)
 ```
 
-The legacy `{ stickers, cover, name, publisher, description }` payload
-object is still accepted. Max 60 stickers; each sticker under 1MB;
-converted to WebP automatically.
+Max 60 stickers; each sticker under 1MB; converted to WebP automatically.
 
 ### sendAlbum
 
