@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./lib/index.js",
   "module": "./lib/index.js",
-  "types": "./types/index.d.ts",
+  "types": "./lib/types/index.js",
   "exports": {
     ".": {
       "import": "./lib/index.js",
@@ -48,5 +48,8 @@
     "baileys": {
       "optional": true
     }
+  },
+  "scripts": {
+    "test": "node --test tests/core/*.test.js"
   }
 }
